@@ -28,13 +28,13 @@ SOURCES += \
         main.cpp \
         CMainWindow.cpp \
         C3dView.cpp \
-        CCouche.cpp
+        CMesh.cpp
 
 HEADERS += \
         CMainWindow.h \
         C3dView.h \
-        common.h \
-        CCouche.h
+        CMesh.h \
+        geometry.h
 
 FORMS += \
         CMainWindow.ui

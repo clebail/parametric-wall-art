@@ -1,0 +1,9 @@
+*.o
+moc_*.*
+ui_*.*
+Makefile
+.qmake.stash
+.qtc_clangd/
+parametric-wall-art
+parametric-wall-art.pro.user
+qrc_parametric-wall-art.cpp

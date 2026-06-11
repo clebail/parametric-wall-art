@@ -2,5 +2,6 @@
 <RCC version="1.0">
     <qresource prefix="/">
         <file>textures/boisClair.jpg</file>
+        <file>icons/appicon.png</file>
     </qresource>
 </RCC>

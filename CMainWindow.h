@@ -11,6 +11,9 @@ class CMainWindow : public QMainWindow, private Ui::CMainWindow
 public:
     explicit CMainWindow(QWidget *parent = nullptr);
     ~CMainWindow();
+private slots:
+    void onImport(void);
+    void onBrightnessChanged(int value);
 };
 //-----------------------------------------------------------------------------------------------
 #endif // CMAINWINDOW_H
