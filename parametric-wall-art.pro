@@ -24,16 +24,22 @@ DEFINES += QT_DEPRECATED_WARNINGS
 
 CONFIG += c++11
 
+LIBS += -lGLU
+
 SOURCES += \
         main.cpp \
         CMainWindow.cpp \
         C3dView.cpp \
-        CMesh.cpp
+        CMesh.cpp \
+        CSlicer.cpp \
+        CCutPlan.cpp
 
 HEADERS += \
         CMainWindow.h \
         C3dView.h \
         CMesh.h \
+        CSlicer.h \
+        CCutPlan.h \
         geometry.h
 
 FORMS += \

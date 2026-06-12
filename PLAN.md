@@ -180,8 +180,11 @@ void setSlices(const std::vector<CSlice>& slices, CSlicer::Axis axis,
 
 ## Reprise — où on en est
 
-- Statut : **Phase 1 terminée et vérifiée.** ✅
-- **Prochaine étape : Phase 2** (`CSlicer` / `CSlice` — intersection plan×triangles + couture des contours).
+- Statut : **Phases 1, 2, 3 et 4 terminées — v1 fonctionnelle.** ✅
+- **Décision** : coupe limitée aux axes **X/Y/Z** en v1 (pas de plan oblique). Pas de rotation/recadrage
+  dans l'UI : le STL est supposé déjà bien posé ; on change d'axe au besoin.
+- ⚠️ **Reste la vérif visuelle réelle par l'utilisateur** (besoin d'un display) : importer un STL,
+  voir les lamelles côte à côte, jouer sur axe/nb tranches, exporter et ouvrir SVG/DXF.
 
 ### Refonte affichage (fait, hors phase initiale)
 - **Ancien vase paramétrique supprimé** : `CCouche.cpp/.h` + `common.h` retirés (et du `.pro`).
@@ -221,5 +224,79 @@ g++ -fPIC -std=c++11 $(pkg-config --cflags Qt5Core) \
 qmake parametric-wall-art.pro && make                    # build app complet OK
 ```
 
-> Reste à faire : Phases 2 (slicer), 3 (export SVG/DXF + nesting), 4 (UI + preview 3D). Projet sinon
-> à l'état du commit `6ab4031` + cette Phase 1 en working tree (non commitée).
+### Phase 2 livrée
+- `CSlicer.h/.cpp` — `CSlice` { `index`, `position`, `contours` } + `CSlicer::slice(mesh, axis, nbSlices)`.
+  Coupe au centre de chaque slab (`pos = lo + (k+0.5)*thickness`), intersection plan×triangle
+  (classement par signe de `axisValue - pos`, interpolation d'arête, snap epsilon des sommets coplanaires),
+  projection 2D `project()` (AxisX→(Z,Y), AxisY→(X,Z), AxisZ→(X,Y)), couture des segments en boucles
+  fermées via grille quantifiée (`stitch()`), `qWarning` sur boucles ouvertes. Helpers `thickness()`,
+  `signedArea()`.
+- `parametric-wall-art.pro` — `CSlicer.cpp`/`CSlicer.h` ajoutés.
+- `tests/gen_sphere_stl.py` → `tests/sphere.stl` (rayon 10 centré, 1536 tris).
+- `tests/test_slicer.cpp` — test headless. **Tous verts** : cube (10 tranches, épaisseur 2, contour 20×20,
+  aire ~400) + sphère (tranche centrale = 1 contour fermé, rayon mesuré ~= rayon sphère).
+
+#### Comment relancer la vérif Phase 2
+```bash
+python3 tests/gen_cube_stl.py && python3 tests/gen_sphere_stl.py
+g++ -fPIC -std=c++11 $(pkg-config --cflags Qt5Core) \
+    tests/test_slicer.cpp CSlicer.cpp CMesh.cpp $(pkg-config --libs Qt5Core) -o /tmp/test_slicer
+/tmp/test_slicer tests/cube_ascii.stl tests/sphere.stl   # -> "TOUS LES TESTS PASSENT"
+```
+
+### Phase 3 livrée
+- `CCutPlan.h/.cpp` — `Params` (échelle mm/unité, épaisseur matériau, taille feuille L×H, marge,
+  espacement), `Piece` (contours mm normalisés + tx/ty + n° feuille). `build()` : une pièce par
+  tranche non vide (mise à l'échelle + normalisation bbox), **nesting par rangées** (tri hauteur
+  décroissante, remplissage gauche→droite, retour ligne au débordement, nouvelle feuille quand plein),
+  `qWarning` si pièce > feuille. `exportSVG()`/`exportDXF()` : un fichier `<base>_sheetN.svg|dxf` par feuille.
+  - SVG : unités mm, `viewBox`, groupe `translate+scale(1,-1)` (repère y-haut), `<rect>` feuille,
+    `<polygon>` par contour (`stroke 0.1`), `<text>` n° de tranche (hors groupe pour éviter le miroir).
+  - DXF : R12 ASCII (`AC1009`), TABLES calques `CUT`/`LABEL`, `POLYLINE`/`VERTEX`/`SEQEND` fermées,
+    `TEXT` centré. Pas de LWPOLYLINE (compat large).
+- `parametric-wall-art.pro` — `CCutPlan.cpp`/`CCutPlan.h` ajoutés.
+- `tests/test_cutplan.cpp` — test headless. **Tous verts** : cube → 5 pièces 40×40 mm (échelle ×2),
+  1 feuille, non chevauchantes, dans les bornes ; SVG = 5 polygones + 5 étiquettes ; DXF = 5 polylignes
+  + 5 textes + EOF.
+
+#### Comment relancer la vérif Phase 3
+```bash
+g++ -fPIC -std=c++11 $(pkg-config --cflags Qt5Core) \
+    tests/test_cutplan.cpp CCutPlan.cpp CSlicer.cpp CMesh.cpp \
+    $(pkg-config --libs Qt5Core) -o /tmp/test_cutplan
+/tmp/test_cutplan tests/cube_ascii.stl   # -> "TOUS LES TESTS PASSENT"
+# Fichiers exemples ecrits dans /tmp/test_cutplan_out_sheet1.svg / .dxf
+```
+
+### Phase 4 livrée
+- `C3dView` — mode tranches : `setSlices(slices, axis, thickness, gap)` / `clearSlices()`, accesseur
+  `mesh()`. `draw()` branche `drawSlices()` (si tranches) sinon `drawMesh()`. Rendu d'une lamelle :
+  faces avant/arrière via **tesselateur GLU** (`GLU_TESS_WINDING_ODD` → concavités + trous),
+  extrudées de `thickness` le long de l'axe, **parois latérales** en quad-strip. Texture bois réutilisée
+  (UV planaire XY). Espacement `thickness+gap` → effet « côte à côte ». `computeSliceFit()` recentre/
+  normalise la pile étalée dans le frustum. Callbacks GLU + `uvTo3D()` (inverse de `CSlicer::project`).
+- `CMainWindow` — panneau de contrôle **construit en code** (le `.ui` reste w3d + slider lumière) :
+  central passé en `QHBoxLayout` (panneau gauche / vue+luminosité droite via reparentage avant
+  `setCentralWidget`). Contrôles : bouton Importer, combo axe X/Y/Z, spin nb tranches (déf. 30),
+  spins échelle/épaisseur/feuille L·H/marge/espacement, bouton Exporter, label infos. Slots
+  `onImport`/`onParamsChanged`/`onExport` + `reslice()` (slice → `setSlices` → `m_plan.build` → infos).
+- `parametric-wall-art.pro` — `LIBS += -lGLU` ajouté.
+- Build complet OK (seul warning restant : `QWheelEvent::delta` pré-existant). Smoke test offscreen OK.
+
+#### Comment relancer la vérif (tous les tests headless)
+```bash
+python3 tests/gen_cube_stl.py && python3 tests/gen_sphere_stl.py
+for t in mesh slicer cutplan; do
+  case $t in
+   mesh)    SRC="tests/test_mesh.cpp CMesh.cpp"; ARGS="tests/cube_ascii.stl tests/cube_bin.stl";;
+   slicer)  SRC="tests/test_slicer.cpp CSlicer.cpp CMesh.cpp"; ARGS="tests/cube_ascii.stl tests/sphere.stl";;
+   cutplan) SRC="tests/test_cutplan.cpp CCutPlan.cpp CSlicer.cpp CMesh.cpp"; ARGS="tests/cube_ascii.stl";;
+  esac
+  g++ -fPIC -std=c++11 $(pkg-config --cflags Qt5Core) $SRC $(pkg-config --libs Qt5Core) -o /tmp/test_$t
+  echo "== $t =="; /tmp/test_$t $ARGS | tail -1
+done
+qmake parametric-wall-art.pro && make    # build app complet
+```
+
+> **v1 complète.** Reste la vérif visuelle réelle (display) + idées v2 hors périmètre : compensation
+> kerf, rotation/recadrage du modèle, plan de coupe oblique, voxelisation pour maillages non étanches.

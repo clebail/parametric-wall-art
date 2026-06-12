@@ -1,11 +1,52 @@
 //-----------------------------------------------------------------------------------------------
 #include <algorithm>
 #include <cmath>
+#include <vector>
 #include <QtDebug>
 #include <QColor>
 #include <QWheelEvent>
 #include <QMouseEvent>
-#include "C3dView.h"
+#include "C3dView.h"   // tire les en-tetes GL de Qt en premier
+#include <GL/glu.h>    // glu.h apres, pour eviter le conflit GL_GLEXT_VERSION
+//-----------------------------------------------------------------------------------------------
+#ifndef CALLBACK
+#define CALLBACK
+#endif
+//-----------------------------------------------------------------------------------------------
+// Contexte passe au tesselateur GLU (via polygon_data) pour calculer les coordonnees de texture
+// et liberer les sommets crees par le callback "combine".
+namespace {
+struct TessCtx {
+    float mnx, mny, szx, szy;          // bbox XY du mesh -> mapping UV bois planaire
+    std::vector<GLdouble*> combined;   // sommets alloues par combine, a liberer
+};
+// Mapping (u,v) plan + position sur l'axe -> coordonnees 3D monde (inverse de CSlicer::project).
+inline void uvTo3D(int axis, float u, float v, float axisPos, GLdouble out[3]) {
+    switch (axis) {
+        case 0: out[0] = axisPos; out[1] = v; out[2] = u; break;   // X : Y=v, Z=u
+        case 1: out[0] = u; out[1] = axisPos; out[2] = v; break;   // Y : X=u, Z=v
+        default: out[0] = u; out[1] = v; out[2] = axisPos; break;  // Z : X=u, Y=v
+    }
+}
+void CALLBACK tessBegin(GLenum type, void *) { glBegin(type); }
+void CALLBACK tessEnd(void *) { glEnd(); }
+void CALLBACK tessVertex(void *vd, void *pd) {
+    const GLdouble *v = static_cast<const GLdouble *>(vd);
+    const TessCtx *c = static_cast<const TessCtx *>(pd);
+    const float tu = c->szx > 1e-6f ? (float(v[0]) - c->mnx) / c->szx : 0.0f;
+    const float tv = c->szy > 1e-6f ? (float(v[1]) - c->mny) / c->szy : 0.0f;
+    glTexCoord2f(tu, tv);
+    glVertex3dv(v);
+}
+void CALLBACK tessCombine(GLdouble coords[3], void *[4], GLfloat [4],
+                          void **outData, void *pd) {
+    TessCtx *c = static_cast<TessCtx *>(pd);
+    GLdouble *nv = new GLdouble[3];
+    nv[0] = coords[0]; nv[1] = coords[1]; nv[2] = coords[2];
+    c->combined.push_back(nv);
+    *outData = nv;
+}
+} // namespace
 //-----------------------------------------------------------------------------------------------
 C3dView::C3dView(QWidget *parent) : QGLWidget(parent) {
     scale = 1.0;
@@ -15,6 +56,10 @@ C3dView::C3dView(QWidget *parent) : QGLWidget(parent) {
     m_hasMesh = false;
     m_fitScale = 1.0f;
     m_brightness = 1.0f;
+    m_sliceAxis = CSlicer::AxisX;
+    m_sliceThickness = m_sliceGap = 0.0f;
+    m_sliceMode = false;
+    m_sliceFitScale = 1.0f;
 }
 //-----------------------------------------------------------------------------------------------
 C3dView::~C3dView(void) {
@@ -152,9 +197,167 @@ void C3dView::computeFit(void) {
     m_fitScale = maxDim > 1e-6f ? 3.0f / maxDim : 1.0f;
 }
 //-----------------------------------------------------------------------------------------------
+void C3dView::setSlices(const std::vector<CSlice> &slices, CSlicer::Axis axis,
+                        float thickness, float gap) {
+    m_slices = slices;
+    m_sliceAxis = axis;
+    m_sliceThickness = thickness;
+    m_sliceGap = gap;
+    m_sliceMode = !slices.empty();
+    if (m_sliceMode)
+        computeSliceFit();
+    updateGL();
+}
+//-----------------------------------------------------------------------------------------------
+void C3dView::clearSlices(void) {
+    m_slices.clear();
+    m_sliceMode = false;
+    updateGL();
+}
+//-----------------------------------------------------------------------------------------------
+// Fit du mode tranches : le pas des lamelles vaut l'epaisseur reelle (le jeu visuel est pris EN
+// DEDANS de chaque lamelle), donc la pile reconstruit exactement l'enveloppe du modele -> meme
+// recentrage/echelle que l'affichage du mesh, la geometrie globale est preservee.
+void C3dView::computeSliceFit(void) {
+    m_sliceFitCenter = m_mesh.center();
+    const SVec3 sz = m_mesh.size();
+    const float maxDim = std::max(sz.x, std::max(sz.y, sz.z));
+    m_sliceFitScale = maxDim > 1e-6f ? 3.0f / maxDim : 1.0f;
+}
+//-----------------------------------------------------------------------------------------------
 void C3dView::draw(void) {
-    if (m_hasMesh)
+    if (m_sliceMode && !m_slices.empty())
+        drawSlices();
+    else if (m_hasMesh)
         drawMesh();
+}
+//-----------------------------------------------------------------------------------------------
+// Rendu des lamelles : pour chaque tranche, faces avant/arriere remplies (tesselateur GLU, regle
+// d'enroulement IMPAIR -> gere concavites + trous), extrudees de thickness le long de l'axe, +
+// parois laterales. Les tranches sont espacees de thickness+gap -> effet "cote a cote".
+void C3dView::drawSlices(void) {
+    glScalef(m_sliceFitScale, m_sliceFitScale, m_sliceFitScale);
+    glTranslatef(-m_sliceFitCenter.x, -m_sliceFitCenter.y, -m_sliceFitCenter.z);
+
+    const int ai = int(m_sliceAxis);
+    const float lo = axisValue(m_mesh.bboxMin(), ai);
+    const float pitch = m_sliceThickness;                 // pas reel : enveloppe preservee
+    // Jeu visuel pris EN DEDANS du pas (lamelle amincie), jamais ajoute.
+    float halfT = (m_sliceThickness - m_sliceGap) * 0.5f;
+    if (halfT < m_sliceThickness * 0.05f)
+        halfT = m_sliceThickness * 0.05f;                 // garde une lamelle visible
+    const SVec3 mn = m_mesh.bboxMin();
+    const SVec3 sz = m_mesh.size();
+
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, texture);
+
+    GLUtesselator *tess = gluNewTess();
+    gluTessProperty(tess, GLU_TESS_WINDING_RULE, GLU_TESS_WINDING_ODD);
+    gluTessCallback(tess, GLU_TESS_BEGIN_DATA,   (_GLUfuncptr)tessBegin);
+    gluTessCallback(tess, GLU_TESS_END_DATA,     (_GLUfuncptr)tessEnd);
+    gluTessCallback(tess, GLU_TESS_VERTEX_DATA,  (_GLUfuncptr)tessVertex);
+    gluTessCallback(tess, GLU_TESS_COMBINE_DATA, (_GLUfuncptr)tessCombine);
+
+    TessCtx ctx;
+    ctx.mnx = mn.x; ctx.mny = mn.y; ctx.szx = sz.x; ctx.szy = sz.y;
+
+    // Vecteur normal/axe selon ai (+1 pour la face avant).
+    GLdouble nrm[3] = { 0, 0, 0 };
+
+    for (size_t s = 0; s < m_slices.size(); s++) {
+        const CSlice &sl = m_slices[s];
+        if (sl.contours.empty())
+            continue;
+
+        const float center = lo + (sl.index + 0.5f) * pitch;
+        const float front = center + halfT;
+        const float back  = center - halfT;
+
+        // --- Face avant (normale +axe) ---
+        nrm[0] = nrm[1] = nrm[2] = 0; nrm[ai] = 1.0;
+        glNormal3d(nrm[0], nrm[1], nrm[2]);
+        gluTessNormal(tess, nrm[0], nrm[1], nrm[2]);
+        {
+            size_t total = 0;
+            for (size_t c = 0; c < sl.contours.size(); c++) total += sl.contours[c].size();
+            std::vector<GLdouble> buf(3 * (total ? total : 1));
+            size_t idx = 0;
+            gluTessBeginPolygon(tess, &ctx);
+            for (size_t c = 0; c < sl.contours.size(); c++) {
+                const Contour &ct = sl.contours[c];
+                if (ct.size() < 3) continue;
+                gluTessBeginContour(tess);
+                for (size_t k = 0; k < ct.size(); k++) {
+                    uvTo3D(ai, ct[k].x, ct[k].y, front, &buf[3 * idx]);
+                    gluTessVertex(tess, &buf[3 * idx], &buf[3 * idx]);
+                    idx++;
+                }
+                gluTessEndContour(tess);
+            }
+            gluTessEndPolygon(tess);
+        }
+
+        // --- Face arriere (normale -axe) ---
+        nrm[0] = nrm[1] = nrm[2] = 0; nrm[ai] = -1.0;
+        glNormal3d(nrm[0], nrm[1], nrm[2]);
+        gluTessNormal(tess, nrm[0], nrm[1], nrm[2]);
+        {
+            size_t total = 0;
+            for (size_t c = 0; c < sl.contours.size(); c++) total += sl.contours[c].size();
+            std::vector<GLdouble> buf(3 * (total ? total : 1));
+            size_t idx = 0;
+            gluTessBeginPolygon(tess, &ctx);
+            for (size_t c = 0; c < sl.contours.size(); c++) {
+                const Contour &ct = sl.contours[c];
+                if (ct.size() < 3) continue;
+                gluTessBeginContour(tess);
+                for (size_t k = 0; k < ct.size(); k++) {
+                    uvTo3D(ai, ct[k].x, ct[k].y, back, &buf[3 * idx]);
+                    gluTessVertex(tess, &buf[3 * idx], &buf[3 * idx]);
+                    idx++;
+                }
+                gluTessEndContour(tess);
+            }
+            gluTessEndPolygon(tess);
+        }
+
+        // --- Parois laterales (une bande quad par contour) ---
+        for (size_t c = 0; c < sl.contours.size(); c++) {
+            const Contour &ct = sl.contours[c];
+            const size_t n = ct.size();
+            if (n < 3) continue;
+            glBegin(GL_QUAD_STRIP);
+            for (size_t k = 0; k <= n; k++) {
+                const SPoint2 &p  = ct[k % n];
+                const SPoint2 &pn = ct[(k + 1) % n];
+                const SPoint2 &pp = ct[(k + n - 1) % n];
+                // Normale en plan (perpendiculaire a la tangente), composante axe nulle.
+                float tx = pn.x - pp.x, ty = pn.y - pp.y;
+                float nu = ty, nv = -tx;
+                float len = std::sqrt(nu * nu + nv * nv);
+                if (len > 1e-9f) { nu /= len; nv /= len; }
+                GLdouble nn[3];
+                uvTo3D(ai, nu, nv, 0.0f, nn);   // place (nu,nv) dans le plan (u,v), axe=0
+                glNormal3d(nn[0], nn[1], nn[2]);
+
+                GLdouble vf[3], vb[3];
+                uvTo3D(ai, p.x, p.y, front, vf);
+                uvTo3D(ai, p.x, p.y, back, vb);
+                const float texU = sz.x > 1e-6f ? (float(vf[0]) - mn.x) / sz.x : 0.0f;
+                const float texV = sz.y > 1e-6f ? (float(vf[1]) - mn.y) / sz.y : 0.0f;
+                glTexCoord2f(texU, texV); glVertex3dv(vf);
+                glTexCoord2f(texU, texV); glVertex3dv(vb);
+            }
+            glEnd();
+        }
+    }
+
+    gluDeleteTess(tess);
+    for (size_t i = 0; i < ctx.combined.size(); i++)
+        delete[] ctx.combined[i];
+
+    glDisable(GL_TEXTURE_2D);
 }
 //-----------------------------------------------------------------------------------------------
 void C3dView::drawMesh(void) {
