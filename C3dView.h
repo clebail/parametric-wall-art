@@ -27,6 +27,9 @@ public:
                    float thickness, float gap);
     void clearSlices(void);         // revient a l'affichage du mesh brut
 
+    // Affiche (ou non) la planche de fond + les tenons. scale en mm/unite, epaisseur en mm.
+    void setBoard(bool enabled, float scaleMmPerUnit, float thicknessMm);
+
 protected:
     virtual void wheelEvent(QWheelEvent * event);
     virtual void mousePressEvent(QMouseEvent * event);
@@ -51,12 +54,19 @@ private:
     SVec3 m_sliceFitCenter;
     float m_sliceFitScale;
 
+    // Planche de fond (previsualisation).
+    bool m_boardEnabled;
+    float m_boardScale;       // mm/unite
+    float m_boardThickMm;     // epaisseur lamelle/socle en mm
+
     void draw(void);
     void drawMesh(void);
     void drawSlices(void);
+    void drawBoard(void);
+    void drawAxisIndicator(void);
     void computeFit(void);
     void computeSliceFit(void);
-    void applyLighting(void);   // (re)applique les intensites lumineuses * m_brightness
+    void applyLighting(void);
     void loadTexture(QString textureName, GLuint *texture);
 };
 //-----------------------------------------------------------------------------------------------

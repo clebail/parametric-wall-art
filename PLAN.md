@@ -300,3 +300,73 @@ qmake parametric-wall-art.pro && make    # build app complet
 
 > **v1 complète.** Reste la vérif visuelle réelle (display) + idées v2 hors périmètre : compensation
 > kerf, rotation/recadrage du modèle, plan de coupe oblique, voxelisation pour maillages non étanches.
+
+---
+
+## Itération v2 — UI .ui, échelle pilotée, vide, repère, planche de fond
+
+### UI entièrement déplacée dans le `.ui` (fait)
+- Tout le panneau de contrôle est désormais décrit dans `CMainWindow.ui` (plus de construction
+  en code). `mainLayout` `QHBoxLayout` (stretch 0,1) : `controlPanel` (gauche) + `rightWidget`
+  (vue 3D + slider luminosité). Champs à largeur homogène (`QFormLayout` +
+  `fieldGrowthPolicy = AllNonFixedFieldsGrow`).
+- Groupe **Découpe** : axe X/Y/Z, **Nb lamelles** (ex « Nb tranches »), **Épaisseur vide**,
+  **Épaisseur lamelle** (éditable), case **Générer planche de fond**.
+- Groupe **Matériau / feuille** : **Échelle** (label lecture seule), **Taille finale** (label),
+  largeur/hauteur feuille, marge, espacement pièces. Champ « épaisseur matériau » supprimé.
+
+### Échelle pilotée par nb × épaisseur lamelle (fait)
+- `currentScale() = épaisseur_lamelle × nb_lamelles / taille_modèle_sur_axe`. L'échelle est
+  donc **dérivée** (label lecture seule), pilotée par les paramètres de découpe.
+- `CCutPlan::Params` : champ `materialThickness` retiré ; ajout `generateBoard`,
+  `sliceThickness`, `gapThickness`.
+
+### Épaisseur vide = préserve les proportions (fait, bug corrigé)
+- Le vide **n'allonge pas** l'objet : le pas de tranche du preview reste **constant**
+  (`m_slicer.thickness() = taille_axe / n`) ; lamelle et vide se **partagent** ce pas selon le
+  ratio mm `t:g` (`CMainWindow::sliceViewSplit()`). En montant le vide, la lamelle s'amincit, le
+  vide grandit à sa place — la forme générale est conservée (corrige l'étirement X/Z observé).
+- `C3dView::computeSliceFit()` voit un spread constant → fit stable, sections à taille apparente
+  constante.
+- **Taille finale** : sur l'axe de coupe = `n × lamelle + (n-1) × vide` (volume réel monté au
+  mur, **augmente** avec le vide) ; les deux autres axes = `taille × échelle`.
+
+### Repère X/Y/Z (fait)
+- `C3dView::drawAxisIndicator()` : petit trièdre en bas à gauche (viewport 70px), suivant les
+  rotations de la scène. X rouge, Y vert, Z bleu, + **lettres** X/Y/Z en segments de lignes au
+  bout de chaque axe (couleur de l'axe).
+
+### Planche de fond (socle à fentes + tenons) (fait — v1 de la feature)
+Décisions actées : **socle à fentes + tenons** ; monté à l'**arrière** (u mini = « Z min » pour
+coupe X) ; socle **perpendiculaire aux lamelles** = le long de l'axe de coupe (la formulation
+« perpendiculaire à l'axe » était à interpréter ainsi, sinon le socle ne tiendrait rien).
+- `geometry.h` → `namespace BoardJoint` : constantes **partagées** plan-de-découpe / preview —
+  `kTabWidth=10`, `kTwoTabMin=40`, `kTabPad=4` (mm).
+- `CCutPlan::build()` refondu en 4 phases : (1) contours mis à l'échelle **non normalisés** +
+  bbox global ; (2) si socle : greffe les **tenons** sur le contour arrière des lamelles en
+  contact (`attachTenon()` — union locale rectangle/contour sans lib de clipping), 1 ou 2 tenons
+  selon la hauteur de contact (`kTwoTabMin`), collecte les **mortaises** ; construit la pièce
+  **socle** = rectangle `L×H` percé de mortaises standard (`t × kTabWidth`), `sliceIndex=-1`,
+  étiquette « FOND » ; (3) normalisation par pièce (tenons inclus) ; (4) nesting (inchangé).
+  - Contact : une lamelle est « en contact » si son dos atteint le plan du socle (`u_min` global)
+    à `tol = épaisseur lamelle` près. Sinon → **flottante** (`m_floating`), pas de tenon.
+  - Export SVG/DXF : le socle sort comme une pièce normale (contour + trous mortaises + label).
+- `CMainWindow` : case `m_genBoard` → `onParamsChanged` (rebuild). Alerte dans le label infos :
+  `⚠ N lamelle(s) sans contact avec le fond : …`. `currentParams()` transmet
+  generateBoard/sliceThickness/gapThickness.
+- **Aperçu 3D** : `C3dView::setBoard(enabled, scale, thicknessMm)` + `drawBoard()` (appelé en fin
+  de `drawSlices`, même transfo modèle). Dessine le **socle** (plaque texturée le long de l'axe,
+  plan arrière) + les **tenons** des lamelles en contact (boîtes texturées), en unités modèle via
+  `emitBox()`/`emitQuad()`. Mêmes constantes `BoardJoint` /échelle → cohérent avec l'export.
+
+### À améliorer plus tard (TODO)
+- **Position du socle** : actuellement figée au plan arrière (u mini global). Beaucoup de lamelles
+  d'un modèle organique (ex. bec/anse de la théière) seront « flottantes » → revoir : socle
+  positionnable, ou tenons de longueur variable, ou plusieurs socles.
+- Choix du **côté du socle** (Dessous / Arrière) exposé dans l'UI (pour l'instant codé « arrière »).
+- Affiner la **détection de contact** / tolérance, et le seuil **1 vs 2 tenons**.
+- `attachTenon()` : gère le cas générique (1 entrée / 1 sortie de bande). Cas tordus (rentrées
+  multiples, contour très concave au dos) → tenon ignoré (lamelle comptée flottante). À durcir.
+- Vérif visuelle réelle de la feature socle (display) : position, nombre de tenons, mortaises
+  alignées avec les tenons à l'assemblage.
+- Avertissement `QWheelEvent::delta` toujours présent (pré-existant, non bloquant).

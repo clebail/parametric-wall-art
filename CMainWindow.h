@@ -8,13 +8,6 @@
 #include "CSlicer.h"
 #include "CCutPlan.h"
 //-----------------------------------------------------------------------------------------------
-class QComboBox;
-class QSpinBox;
-class QDoubleSpinBox;
-class QLabel;
-class QPushButton;
-class QWidget;
-//-----------------------------------------------------------------------------------------------
 class CMainWindow : public QMainWindow, private Ui::CMainWindow
 {
     Q_OBJECT
@@ -26,26 +19,17 @@ private slots:
     void onParamsChanged(void);
     void onExport(void);
     void onBrightnessChanged(int value);
+    void onNbOrThickChanged(void);
+    void onGapChanged(void);
 private:
-    QWidget * buildControlPanel(void);
-    void reslice(void);                 // re-tranche + rebuild plan + maj vue + infos
+    void reslice(void);
     void updateInfo(void);
     CCutPlan::Params currentParams(void) const;
+    float axisModelSize(void) const;
+    float currentScale(void) const;
+    void  sliceViewSplit(float &thickView, float &gapView) const;
+    void  applyBoardPreview(void);
 
-    // Controles du panneau (construits en code).
-    QPushButton    *m_importBtn;
-    QComboBox      *m_axisCombo;
-    QSpinBox       *m_nbSlices;
-    QDoubleSpinBox *m_scale;
-    QDoubleSpinBox *m_material;
-    QDoubleSpinBox *m_sheetW;
-    QDoubleSpinBox *m_sheetH;
-    QDoubleSpinBox *m_margin;
-    QDoubleSpinBox *m_spacing;
-    QPushButton    *m_exportBtn;
-    QLabel         *m_info;
-
-    // Etat.
     CSlicer m_slicer;
     std::vector<CSlice> m_slices;
     CCutPlan m_plan;

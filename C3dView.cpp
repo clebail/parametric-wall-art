@@ -28,6 +28,41 @@ inline void uvTo3D(int axis, float u, float v, float axisPos, GLdouble out[3]) {
         default: out[0] = u; out[1] = v; out[2] = axisPos; break;  // Z : X=u, Y=v
     }
 }
+// Quad texture (UV bois planaire) avec normale calculee par produit vectoriel.
+void emitQuad(const GLdouble A[3], const GLdouble B[3], const GLdouble C[3], const GLdouble D[3],
+              float mnx, float mny, float szx, float szy) {
+    const double ux = B[0]-A[0], uy = B[1]-A[1], uz = B[2]-A[2];
+    const double vx = D[0]-A[0], vy = D[1]-A[1], vz = D[2]-A[2];
+    double nx = uy*vz - uz*vy, ny = uz*vx - ux*vz, nz = ux*vy - uy*vx;
+    const double l = std::sqrt(nx*nx + ny*ny + nz*nz);
+    if (l > 1e-12) { nx /= l; ny /= l; nz /= l; }
+    glNormal3d(nx, ny, nz);
+    const GLdouble *q[4] = { A, B, C, D };
+    for (int i = 0; i < 4; i++) {
+        const float tu = szx > 1e-6f ? (float(q[i][0]) - mnx) / szx : 0.0f;
+        const float tv = szy > 1e-6f ? (float(q[i][1]) - mny) / szy : 0.0f;
+        glTexCoord2f(tu, tv);
+        glVertex3dv(q[i]);
+    }
+}
+// Boite alignee dans le repere (u, v, axe) -> 6 faces texturees.
+void emitBox(int ai, float uLo, float uHi, float vLo, float vHi, float aLo, float aHi,
+             float mnx, float mny, float szx, float szy) {
+    const float us[2] = { uLo, uHi }, vs[2] = { vLo, vHi }, as[2] = { aLo, aHi };
+    GLdouble c[2][2][2][3];
+    for (int iu = 0; iu < 2; iu++)
+        for (int iv = 0; iv < 2; iv++)
+            for (int ia = 0; ia < 2; ia++)
+                uvTo3D(ai, us[iu], vs[iv], as[ia], c[iu][iv][ia]);
+    glBegin(GL_QUADS);
+    emitQuad(c[0][0][0], c[0][1][0], c[0][1][1], c[0][0][1], mnx, mny, szx, szy);  // u=lo
+    emitQuad(c[1][0][0], c[1][0][1], c[1][1][1], c[1][1][0], mnx, mny, szx, szy);  // u=hi
+    emitQuad(c[0][0][0], c[0][0][1], c[1][0][1], c[1][0][0], mnx, mny, szx, szy);  // v=lo
+    emitQuad(c[0][1][0], c[1][1][0], c[1][1][1], c[0][1][1], mnx, mny, szx, szy);  // v=hi
+    emitQuad(c[0][0][0], c[1][0][0], c[1][1][0], c[0][1][0], mnx, mny, szx, szy);  // a=lo
+    emitQuad(c[0][0][1], c[0][1][1], c[1][1][1], c[1][0][1], mnx, mny, szx, szy);  // a=hi
+    glEnd();
+}
 void CALLBACK tessBegin(GLenum type, void *) { glBegin(type); }
 void CALLBACK tessEnd(void *) { glEnd(); }
 void CALLBACK tessVertex(void *vd, void *pd) {
@@ -60,6 +95,9 @@ C3dView::C3dView(QWidget *parent) : QGLWidget(parent) {
     m_sliceThickness = m_sliceGap = 0.0f;
     m_sliceMode = false;
     m_sliceFitScale = 1.0f;
+    m_boardEnabled = false;
+    m_boardScale = 1.0f;
+    m_boardThickMm = 10.0f;
 }
 //-----------------------------------------------------------------------------------------------
 C3dView::~C3dView(void) {
@@ -149,6 +187,84 @@ void C3dView::paintGL() {
     glScalef(scale, scale, scale);
 
     draw();
+    drawAxisIndicator();
+}
+//-----------------------------------------------------------------------------------------------
+// Repere XYZ en bas a gauche : rouge=X, vert=Y, bleu=Z.
+// Rendu dans un petit viewport independant avec uniquement les rotations de la scene.
+void C3dView::drawAxisIndicator(void) {
+    GLint vp[4];
+    glGetIntegerv(GL_VIEWPORT, vp);
+
+    const int sz = 70, mg = 8;
+    glViewport(mg, mg, sz, sz);
+
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glOrtho(-1.8, 1.8, -1.8, 1.8, -5.0, 5.0);
+
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+    glRotatef(rotx, 1.0f, 0.0f, 0.0f);
+    glRotatef(roty, 0.0f, 1.0f, 0.0f);
+
+    glDisable(GL_LIGHTING);
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_DEPTH_TEST);
+    glLineWidth(2.5f);
+
+    const float L = 1.0f;
+    glBegin(GL_LINES);
+    glColor3f(0.9f, 0.15f, 0.15f); glVertex3f(0,0,0); glVertex3f(L,0,0);  // X rouge
+    glColor3f(0.15f, 0.80f, 0.15f); glVertex3f(0,0,0); glVertex3f(0,L,0); // Y vert
+    glColor3f(0.25f, 0.45f, 1.00f); glVertex3f(0,0,0); glVertex3f(0,0,L); // Z bleu
+    glEnd();
+
+    // Petits points aux extremites pour les distinguer
+    glPointSize(5.0f);
+    glBegin(GL_POINTS);
+    glColor3f(0.9f, 0.15f, 0.15f); glVertex3f(L,0,0);
+    glColor3f(0.15f, 0.80f, 0.15f); glVertex3f(0,L,0);
+    glColor3f(0.25f, 0.45f, 1.00f); glVertex3f(0,0,L);
+    glEnd();
+
+    // Lettres X / Y / Z (segments de lignes) au bout de chaque axe, plan XY.
+    const float h = 0.16f;          // demi-taille du glyphe
+    const float xc = L + 0.30f;     // centre lettre X (sur +X)
+    const float yc = L + 0.30f;     // centre lettre Y (sur +Y)
+    const float zc = L + 0.30f;     // centre lettre Z (sur +Z)
+    glLineWidth(2.0f);
+    glBegin(GL_LINES);
+    // X (rouge) : deux diagonales croisees
+    glColor3f(0.9f, 0.15f, 0.15f);
+    glVertex3f(xc - h, -h, 0); glVertex3f(xc + h,  h, 0);
+    glVertex3f(xc - h,  h, 0); glVertex3f(xc + h, -h, 0);
+    // Y (vert) : deux branches + tige
+    glColor3f(0.15f, 0.80f, 0.15f);
+    glVertex3f(-h, yc + h, 0); glVertex3f(0, yc, 0);
+    glVertex3f( h, yc + h, 0); glVertex3f(0, yc, 0);
+    glVertex3f( 0, yc,     0); glVertex3f(0, yc - h, 0);
+    // Z (bleu) : haut, diagonale, bas
+    glColor3f(0.25f, 0.45f, 1.00f);
+    glVertex3f(-h,  h, zc); glVertex3f( h,  h, zc);
+    glVertex3f( h,  h, zc); glVertex3f(-h, -h, zc);
+    glVertex3f(-h, -h, zc); glVertex3f( h, -h, zc);
+    glEnd();
+
+    glLineWidth(1.0f);
+    glPointSize(1.0f);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_LIGHTING);
+    glColor3f(1,1,1);
+
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+    glPopMatrix();
+
+    glViewport(vp[0], vp[1], vp[2], vp[3]);
 }
 //-----------------------------------------------------------------------------------------------
 void C3dView::wheelEvent(QWheelEvent * event) {
@@ -215,14 +331,36 @@ void C3dView::clearSlices(void) {
     updateGL();
 }
 //-----------------------------------------------------------------------------------------------
-// Fit du mode tranches : le pas des lamelles vaut l'epaisseur reelle (le jeu visuel est pris EN
-// DEDANS de chaque lamelle), donc la pile reconstruit exactement l'enveloppe du modele -> meme
-// recentrage/echelle que l'affichage du mesh, la geometrie globale est preservee.
+void C3dView::setBoard(bool enabled, float scaleMmPerUnit, float thicknessMm) {
+    m_boardEnabled = enabled;
+    m_boardScale   = scaleMmPerUnit > 0 ? scaleMmPerUnit : 1.0f;
+    m_boardThickMm = thicknessMm > 0 ? thicknessMm : 1.0f;
+    updateGL();
+}
+//-----------------------------------------------------------------------------------------------
+// Fit du mode tranches : l'echelle est basee sur l'etendue reelle de la pile assemblee.
+// Axe de coupe = n * pitch (spread), axes perpendiculaires = dimensions originales du mesh.
+// Ainsi le stack tient toujours dans le frustum et les proportions refletent l'objet assemble.
 void C3dView::computeSliceFit(void) {
-    m_sliceFitCenter = m_mesh.center();
+    const int n  = int(m_slices.size());
+    const int ai = int(m_sliceAxis);
     const SVec3 sz = m_mesh.size();
-    const float maxDim = std::max(sz.x, std::max(sz.y, sz.z));
+    const float pitch = m_sliceThickness + m_sliceGap;
+
+    // Etendue du stack le long de l'axe de coupe.
+    const float spreadAxis = n > 0 ? float(n) * pitch : 1.0f;
+
+    // Max sur les 3 dimensions assemblees : coupe=spread, croix=dims originales.
+    float dims[3] = { sz.x, sz.y, sz.z };
+    dims[ai] = spreadAxis;
+    const float maxDim = std::max(dims[0], std::max(dims[1], dims[2]));
     m_sliceFitScale = maxDim > 1e-6f ? 3.0f / maxDim : 1.0f;
+
+    // Centre geometrique de la pile etalee.
+    const float lo = axisValue(m_mesh.bboxMin(), ai);
+    float cArr[3] = { m_mesh.center().x, m_mesh.center().y, m_mesh.center().z };
+    cArr[ai] = lo + spreadAxis * 0.5f;
+    m_sliceFitCenter = SVec3{cArr[0], cArr[1], cArr[2]};
 }
 //-----------------------------------------------------------------------------------------------
 void C3dView::draw(void) {
@@ -241,11 +379,8 @@ void C3dView::drawSlices(void) {
 
     const int ai = int(m_sliceAxis);
     const float lo = axisValue(m_mesh.bboxMin(), ai);
-    const float pitch = m_sliceThickness;                 // pas reel : enveloppe preservee
-    // Jeu visuel pris EN DEDANS du pas (lamelle amincie), jamais ajoute.
-    float halfT = (m_sliceThickness - m_sliceGap) * 0.5f;
-    if (halfT < m_sliceThickness * 0.05f)
-        halfT = m_sliceThickness * 0.05f;                 // garde une lamelle visible
+    const float pitch = m_sliceThickness + m_sliceGap;    // pas = lamelle + vide
+    const float halfT = m_sliceThickness * 0.5f;          // demi-epaisseur de la lamelle
     const SVec3 mn = m_mesh.bboxMin();
     const SVec3 sz = m_mesh.size();
 
@@ -356,6 +491,91 @@ void C3dView::drawSlices(void) {
     gluDeleteTess(tess);
     for (size_t i = 0; i < ctx.combined.size(); i++)
         delete[] ctx.combined[i];
+
+    glDisable(GL_TEXTURE_2D);
+
+    if (m_boardEnabled)
+        drawBoard();   // meme transformation modele (fitScale + recentrage) deja appliquee
+}
+//-----------------------------------------------------------------------------------------------
+// Planche de fond + tenons, en unites modele (memes reperes que drawSlices). Le socle est une
+// plaque le long de l'axe de coupe, au plan arriere (u mini) ; chaque lamelle en contact recoit
+// 1 ou 2 tenons traversant le socle. Dimensions converties des mm via m_boardScale.
+void C3dView::drawBoard(void) {
+    if (m_slices.empty())
+        return;
+
+    const int ai = int(m_sliceAxis);
+    const SVec3 mn = m_mesh.bboxMin();
+    const SVec3 sz = m_mesh.size();
+    const float lo    = axisValue(mn, ai);
+    const float pitch = m_sliceThickness + m_sliceGap;
+    const float halfT = m_sliceThickness * 0.5f;
+
+    const float scale  = m_boardScale > 0 ? m_boardScale : 1.0f;
+    const float tModel = m_boardThickMm / scale;
+    const float tabW   = BoardJoint::kTabWidth  / scale;
+    const float twoMin = BoardJoint::kTwoTabMin / scale;
+    const float pad    = BoardJoint::kTabPad    / scale;
+    const float tol    = tModel;
+
+    // Plan arriere (u mini), etendue en v, dernier index.
+    float u0 = 1e30f, vmin = 1e30f, vmax = -1e30f;
+    int maxIdx = 0;
+    for (size_t s = 0; s < m_slices.size(); s++) {
+        const CSlice &sl = m_slices[s];
+        if (sl.contours.empty()) continue;
+        maxIdx = std::max(maxIdx, sl.index);
+        for (size_t c = 0; c < sl.contours.size(); c++)
+            for (size_t k = 0; k < sl.contours[c].size(); k++) {
+                u0   = std::min(u0,   sl.contours[c][k].x);
+                vmin = std::min(vmin, sl.contours[c][k].y);
+                vmax = std::max(vmax, sl.contours[c][k].y);
+            }
+    }
+    if (u0 > 1e29f || vmax < vmin)
+        return;
+
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, texture);
+
+    // Socle.
+    emitBox(ai, u0 - tModel, u0, vmin, vmax, lo, lo + float(maxIdx + 1) * pitch,
+            mn.x, mn.y, sz.x, sz.y);
+
+    // Tenons des lamelles en contact.
+    for (size_t s = 0; s < m_slices.size(); s++) {
+        const CSlice &sl = m_slices[s];
+        if (sl.contours.empty()) continue;
+
+        float minu = 1e30f, cvmin = 1e30f, cvmax = -1e30f;
+        for (size_t c = 0; c < sl.contours.size(); c++)
+            for (size_t k = 0; k < sl.contours[c].size(); k++)
+                minu = std::min(minu, sl.contours[c][k].x);
+        if (minu > u0 + tol) continue;   // lamelle flottante : pas de tenon
+
+        for (size_t c = 0; c < sl.contours.size(); c++)
+            for (size_t k = 0; k < sl.contours[c].size(); k++) {
+                const SPoint2 &p = sl.contours[c][k];
+                if (p.x <= u0 + tol) { cvmin = std::min(cvmin, p.y); cvmax = std::max(cvmax, p.y); }
+            }
+        if (cvmax < cvmin) continue;
+
+        float centers[2]; int nc = 0;
+        if (cvmax - cvmin >= twoMin) {
+            centers[nc++] = cvmin + pad + tabW * 0.5f;
+            centers[nc++] = cvmax - pad - tabW * 0.5f;
+        } else {
+            centers[nc++] = 0.5f * (cvmin + cvmax);
+        }
+
+        const float center = lo + (sl.index + 0.5f) * pitch;
+        for (int ci = 0; ci < nc; ci++) {
+            const float vc = centers[ci];
+            emitBox(ai, u0 - tModel, minu + tModel, vc - tabW * 0.5f, vc + tabW * 0.5f,
+                    center - halfT, center + halfT, mn.x, mn.y, sz.x, sz.y);
+        }
+    }
 
     glDisable(GL_TEXTURE_2D);
 }

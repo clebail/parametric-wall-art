@@ -73,6 +73,97 @@ def tube(path, radii, nseg=16):
             k2 = (k+1) % nseg
             add_quad(rings[i][k], rings[i][k2], rings[i+1][k2], rings[i+1][k])
 
+def truncate_z(tris, keep_frac, keep_upper=True):
+    """Tronque le maillage par un plan z = const ('plan x,y'), garde une fraction
+    de la profondeur et rebouche la coupe (cap) pour rester etanche.
+
+    keep_frac : fraction de la profondeur z conservee (6/10 -> 0.6).
+    keep_upper : True -> garde le cote +z (avant), False -> cote -z.
+    Retourne la nouvelle liste de triangles.
+    """
+    zs = [v[2] for t in tris for v in t]
+    zmin, zmax = min(zs), max(zs)
+    if keep_upper:
+        zcut = zmax - keep_frac * (zmax - zmin)
+        sgn = 1.0                                   # garde s = sgn*(z - zcut) >= 0
+    else:
+        zcut = zmin + keep_frac * (zmax - zmin)
+        sgn = -1.0
+
+    QEPS = 1e-4
+    def key(p): return (round(p[0]/QEPS), round(p[1]/QEPS))
+
+    kept, bedges = [], []
+    for tri in tris:
+        pts = list(tri)
+        s = [sgn * (p[2] - zcut) for p in pts]
+        out = []                                    # (point, is_intersection)
+        for i in range(3):
+            cur, sc = pts[i], s[i]
+            nxt, sn = pts[(i+1) % 3], s[(i+1) % 3]
+            if sc >= 0:
+                out.append((cur, False))
+            if (sc >= 0) != (sn >= 0):
+                t = sc / (sc - sn)
+                ip = (cur[0] + t*(nxt[0]-cur[0]), cur[1] + t*(nxt[1]-cur[1]), zcut)
+                out.append((ip, True))
+        if len(out) < 3:
+            continue
+        pl = [p for p, _ in out]
+        for i in range(1, len(pl)-1):               # fan -> triangles conserves
+            kept.append((pl[0], pl[i], pl[i+1]))
+        m = len(out)                                # arete de coupe (sur le plan)
+        for i in range(m):
+            a, ai = out[i]; b, bi = out[(i+1) % m]
+            if ai and bi:
+                bedges.append((a, b))
+                break
+
+    # --- chainage des aretes de coupe en boucles fermees, puis cap ---
+    from collections import defaultdict
+    start = defaultdict(list)
+    for idx, (a, b) in enumerate(bedges):
+        start[key(a)].append(idx)
+    used = [False] * len(bedges)
+    loops = []
+    for idx0 in range(len(bedges)):
+        if used[idx0]:
+            continue
+        loop, idx = [], idx0
+        while idx is not None and not used[idx]:
+            used[idx] = True
+            a, b = bedges[idx]
+            loop.append(a)
+            nxts = [j for j in start[key(b)] if not used[j]]
+            idx = nxts[0] if nxts else None
+        if len(loop) >= 3:
+            loops.append(loop)
+
+    def signed_area(loop):
+        A = 0.0
+        n = len(loop)
+        for i in range(n):
+            x1, y1 = loop[i][0], loop[i][1]
+            x2, y2 = loop[(i+1) % n][0], loop[(i+1) % n][1]
+            A += x1*y2 - x2*y1
+        return A / 2.0
+
+    capped = 0
+    for loop in loops:
+        # normale du cap vers l'exterieur (-sgn en z) -> area signee de signe -sgn
+        if sgn * signed_area(loop) > 0:
+            loop = loop[::-1]
+        c = loop[0]
+        for i in range(1, len(loop)-1):
+            kept.append((c, loop[i], loop[i+1]))
+        capped += 1
+
+    print("  troncature z@%.3f (garde %s, %d%%): %d->%d tris, %d boucle(s) cap"
+          % (zcut, "+z" if keep_upper else "-z", round(keep_frac*100),
+             len(tris), len(kept), capped))
+    return kept
+
+
 def bezier3(p0, p1, p2, n):
     pts = []
     for i in range(n):
@@ -101,6 +192,9 @@ for i in range(16):
     a = math.radians(118 + (242-118) * i/15)   # bombe vers -x
     handle.append((-0.95 + 0.85*math.cos(a), 0.45 + 0.78*math.sin(a), 0.0))
 tube(handle, [0.13]*16, nseg=14)
+
+# ===== Troncature : plan x,y (z=const) un poil avant le centre, garde 6/10 =====
+tris = truncate_z(tris, keep_frac=0.6, keep_upper=True)
 
 # ===== Ecriture STL binaire =====
 here = os.path.dirname(os.path.abspath(__file__))

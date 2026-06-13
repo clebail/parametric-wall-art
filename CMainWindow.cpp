@@ -2,122 +2,61 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QMessageBox>
-#include <QWidget>
-#include <QHBoxLayout>
-#include <QVBoxLayout>
-#include <QFormLayout>
-#include <QComboBox>
-#include <QSpinBox>
-#include <QDoubleSpinBox>
-#include <QLabel>
-#include <QPushButton>
-#include <QGroupBox>
+#include <QStringList>
 #include "CMainWindow.h"
 //-----------------------------------------------------------------------------------------------
 CMainWindow::CMainWindow(QWidget *parent) : QMainWindow(parent), m_hasMesh(false) {
     setupUi(this);
 
-    // Reorganise le central : panneau de controle a gauche, vue 3D (+ luminosite) a droite.
-    QWidget *right = new QWidget;
-    QVBoxLayout *rv = new QVBoxLayout(right);
-    rv->setContentsMargins(0, 0, 0, 0);
-    rv->addWidget(w3d, 1);
-    QHBoxLayout *bl = new QHBoxLayout;
-    bl->addWidget(labelBrightness);
-    bl->addWidget(sliderBrightness);
-    rv->addLayout(bl);
+    connect(actionImporter,  SIGNAL(triggered()),              this, SLOT(onImport()));
+    connect(sliderBrightness,SIGNAL(valueChanged(int)),        this, SLOT(onBrightnessChanged(int)));
+    connect(m_importBtn,     SIGNAL(clicked()),                this, SLOT(onImport()));
+    connect(m_exportBtn,     SIGNAL(clicked()),                this, SLOT(onExport()));
 
-    QWidget *panel = buildControlPanel();
+    connect(m_axisCombo,  SIGNAL(currentIndexChanged(int)), this, SLOT(onNbOrThickChanged()));
+    connect(m_nbSlices,   SIGNAL(valueChanged(int)),        this, SLOT(onNbOrThickChanged()));
+    connect(m_sliceThick, SIGNAL(valueChanged(double)),     this, SLOT(onNbOrThickChanged()));
 
-    QWidget *central = new QWidget;
-    QHBoxLayout *h = new QHBoxLayout(central);
-    h->addWidget(panel);
-    h->addWidget(right, 1);
-    setCentralWidget(central);
-    resize(960, 600);
+    connect(m_gapThick, SIGNAL(valueChanged(double)), this, SLOT(onGapChanged()));
 
-    // menu Fichier / action Importer et sliderBrightness viennent du .ui.
-    connect(actionImporter, SIGNAL(triggered()), this, SLOT(onImport()));
-    connect(sliderBrightness, SIGNAL(valueChanged(int)), this, SLOT(onBrightnessChanged(int)));
+    connect(m_sheetW,  SIGNAL(valueChanged(double)), this, SLOT(onParamsChanged()));
+    connect(m_sheetH,  SIGNAL(valueChanged(double)), this, SLOT(onParamsChanged()));
+    connect(m_margin,  SIGNAL(valueChanged(double)), this, SLOT(onParamsChanged()));
+    connect(m_spacing, SIGNAL(valueChanged(double)), this, SLOT(onParamsChanged()));
+
+    connect(m_genBoard, SIGNAL(toggled(bool)), this, SLOT(onParamsChanged()));
 }
 //-----------------------------------------------------------------------------------------------
 CMainWindow::~CMainWindow() {
 }
 //-----------------------------------------------------------------------------------------------
-QWidget * CMainWindow::buildControlPanel(void) {
-    QWidget *panel = new QWidget;
-    panel->setMaximumWidth(280);
-    QVBoxLayout *v = new QVBoxLayout(panel);
-
-    m_importBtn = new QPushButton(tr("Importer STL…"));
-    v->addWidget(m_importBtn);
-
-    // --- Decoupe ---
-    QGroupBox *gxCut = new QGroupBox(tr("Découpe"));
-    QFormLayout *fCut = new QFormLayout(gxCut);
-    m_axisCombo = new QComboBox;
-    m_axisCombo->addItem(tr("X"));
-    m_axisCombo->addItem(tr("Y"));
-    m_axisCombo->addItem(tr("Z"));
-    fCut->addRow(tr("Axe de coupe"), m_axisCombo);
-    m_nbSlices = new QSpinBox;
-    m_nbSlices->setRange(1, 999);
-    m_nbSlices->setValue(30);
-    fCut->addRow(tr("Nb de tranches"), m_nbSlices);
-    v->addWidget(gxCut);
-
-    // --- Materiau / feuille ---
-    QGroupBox *gxMat = new QGroupBox(tr("Matériau / feuille (mm)"));
-    QFormLayout *fMat = new QFormLayout(gxMat);
-    m_scale = new QDoubleSpinBox;
-    m_scale->setRange(0.001, 10000.0);
-    m_scale->setDecimals(3);
-    m_scale->setValue(1.0);
-    fMat->addRow(tr("Échelle (mm/unité)"), m_scale);
-    m_material = new QDoubleSpinBox;
-    m_material->setRange(0.1, 100.0);
-    m_material->setValue(3.0);
-    fMat->addRow(tr("Épaisseur matériau"), m_material);
-    m_sheetW = new QDoubleSpinBox;
-    m_sheetW->setRange(10.0, 5000.0);
-    m_sheetW->setValue(600.0);
-    fMat->addRow(tr("Largeur feuille"), m_sheetW);
-    m_sheetH = new QDoubleSpinBox;
-    m_sheetH->setRange(10.0, 5000.0);
-    m_sheetH->setValue(400.0);
-    fMat->addRow(tr("Hauteur feuille"), m_sheetH);
-    m_margin = new QDoubleSpinBox;
-    m_margin->setRange(0.0, 500.0);
-    m_margin->setValue(10.0);
-    fMat->addRow(tr("Marge bord"), m_margin);
-    m_spacing = new QDoubleSpinBox;
-    m_spacing->setRange(0.0, 500.0);
-    m_spacing->setValue(5.0);
-    fMat->addRow(tr("Espacement pièces"), m_spacing);
-    v->addWidget(gxMat);
-
-    m_exportBtn = new QPushButton(tr("Exporter plan de découpe…"));
-    m_exportBtn->setEnabled(false);
-    v->addWidget(m_exportBtn);
-
-    m_info = new QLabel(tr("Aucun modèle importé."));
-    m_info->setWordWrap(true);
-    v->addWidget(m_info);
-
-    v->addStretch(1);
-
-    connect(m_importBtn, SIGNAL(clicked()), this, SLOT(onImport()));
-    connect(m_exportBtn, SIGNAL(clicked()), this, SLOT(onExport()));
-    connect(m_axisCombo, SIGNAL(currentIndexChanged(int)), this, SLOT(onParamsChanged()));
-    connect(m_nbSlices, SIGNAL(valueChanged(int)), this, SLOT(onParamsChanged()));
-    connect(m_scale, SIGNAL(valueChanged(double)), this, SLOT(onParamsChanged()));
-    connect(m_material, SIGNAL(valueChanged(double)), this, SLOT(onParamsChanged()));
-    connect(m_sheetW, SIGNAL(valueChanged(double)), this, SLOT(onParamsChanged()));
-    connect(m_sheetH, SIGNAL(valueChanged(double)), this, SLOT(onParamsChanged()));
-    connect(m_margin, SIGNAL(valueChanged(double)), this, SLOT(onParamsChanged()));
-    connect(m_spacing, SIGNAL(valueChanged(double)), this, SLOT(onParamsChanged()));
-
-    return panel;
+float CMainWindow::axisModelSize(void) const {
+    const SVec3 sz = w3d->mesh().size();
+    switch (m_axisCombo->currentIndex()) {
+        case 0:  return sz.x;
+        case 1:  return sz.y;
+        default: return sz.z;
+    }
+}
+//-----------------------------------------------------------------------------------------------
+float CMainWindow::currentScale(void) const {
+    if (!m_hasMesh) return 1.0f;
+    const float axisSize = axisModelSize();
+    if (axisSize <= 0.0f) return 1.0f;
+    return float(m_sliceThick->value()) * float(m_nbSlices->value()) / axisSize;
+}
+//-----------------------------------------------------------------------------------------------
+// Repartit le pas de tranche (constant, en unites modele) entre lamelle pleine et vide,
+// selon le ratio mm lamelle:vide. Le pas total reste m_slicer.thickness() -> la pile ne
+// s'allonge jamais quand on change le vide : la lamelle s'amincit, le vide grandit a la place.
+void CMainWindow::sliceViewSplit(float &thickView, float &gapView) const {
+    const float pitch = m_slicer.thickness();
+    const float t     = float(m_sliceThick->value());
+    const float g     = float(m_gapThick->value());
+    const float denom = t + g;
+    const float frac  = denom > 0.0f ? t / denom : 1.0f;
+    thickView = pitch * frac;
+    gapView   = pitch * (1.0f - frac);
 }
 //-----------------------------------------------------------------------------------------------
 void CMainWindow::onImport(void) {
@@ -129,58 +68,112 @@ void CMainWindow::onImport(void) {
     if (w3d->loadMesh(path)) {
         m_hasMesh = true;
         setWindowTitle(tr("Parametric Wall Art — %1").arg(QFileInfo(path).fileName()));
-        reslice();
+        onNbOrThickChanged();
     } else {
         QMessageBox::warning(this, tr("Erreur"), tr("Chargement impossible : %1").arg(path));
     }
 }
 //-----------------------------------------------------------------------------------------------
+void CMainWindow::onNbOrThickChanged(void) {
+    if (!m_hasMesh) return;
+    reslice();
+}
+//-----------------------------------------------------------------------------------------------
+void CMainWindow::onGapChanged(void) {
+    if (!m_hasMesh) return;
+    float thickView, gapView;
+    sliceViewSplit(thickView, gapView);
+    w3d->setSlices(m_slices, CSlicer::Axis(m_axisCombo->currentIndex()),
+                   thickView, gapView);
+    m_plan.build(m_slices, currentParams());           // le vide change l'espacement du socle
+    m_exportBtn->setEnabled(m_plan.pieceCount() > 0);
+    applyBoardPreview();
+    updateInfo();
+}
+//-----------------------------------------------------------------------------------------------
+void CMainWindow::applyBoardPreview(void) {
+    w3d->setBoard(m_genBoard->isChecked(), currentScale(), float(m_sliceThick->value()));
+}
+//-----------------------------------------------------------------------------------------------
 void CMainWindow::onParamsChanged(void) {
-    if (m_hasMesh)
-        reslice();
+    if (!m_hasMesh) return;
+    m_plan.build(m_slices, currentParams());
+    m_exportBtn->setEnabled(m_plan.pieceCount() > 0);
+    applyBoardPreview();
+    updateInfo();
 }
 //-----------------------------------------------------------------------------------------------
 void CMainWindow::reslice(void) {
     const CSlicer::Axis axis = CSlicer::Axis(m_axisCombo->currentIndex());
     m_slices = m_slicer.slice(w3d->mesh(), axis, m_nbSlices->value());
 
-    // Aperçu 3D : petit gap visuel proportionnel a l'epaisseur.
-    const float thick = m_slicer.thickness();
-    w3d->setSlices(m_slices, axis, thick, thick * 0.15f);
+    float thickView, gapView;
+    sliceViewSplit(thickView, gapView);
+    w3d->setSlices(m_slices, axis, thickView, gapView);
+    applyBoardPreview();
 
     m_plan.build(m_slices, currentParams());
     m_exportBtn->setEnabled(m_plan.pieceCount() > 0);
+
+    m_sliceThick->setEnabled(true);
+    m_gapThick->setEnabled(true);
+
     updateInfo();
 }
 //-----------------------------------------------------------------------------------------------
 CCutPlan::Params CMainWindow::currentParams(void) const {
     CCutPlan::Params p;
-    p.scale = float(m_scale->value());
-    p.materialThickness = float(m_material->value());
-    p.sheetW = float(m_sheetW->value());
-    p.sheetH = float(m_sheetH->value());
-    p.margin = float(m_margin->value());
-    p.spacing = float(m_spacing->value());
+    p.scale          = currentScale();
+    p.sheetW         = float(m_sheetW->value());
+    p.sheetH         = float(m_sheetH->value());
+    p.margin         = float(m_margin->value());
+    p.spacing        = float(m_spacing->value());
+    p.generateBoard  = m_genBoard->isChecked();
+    p.sliceThickness = float(m_sliceThick->value());
+    p.gapThickness   = float(m_gapThick->value());
     return p;
 }
 //-----------------------------------------------------------------------------------------------
 void CMainWindow::updateInfo(void) {
     if (!m_hasMesh) {
+        m_scaleLabel->setText(tr("—"));
+        m_sizeLabel->setText(tr("—"));
         m_info->setText(tr("Aucun modèle importé."));
         return;
     }
-    const SVec3 sz = w3d->mesh().size();
-    const float s = float(m_scale->value());
-    const float slab = m_slicer.thickness() * s;
-    m_info->setText(tr("Dimensions : %1 × %2 × %3 mm\n"
-                       "Lamelle : %4 mm\n"
-                       "Pièces : %5 — Feuilles : %6")
-                    .arg(sz.x * s, 0, 'f', 1)
-                    .arg(sz.y * s, 0, 'f', 1)
-                    .arg(sz.z * s, 0, 'f', 1)
-                    .arg(slab, 0, 'f', 2)
+    const float s   = currentScale();
+    const SVec3 sz  = w3d->mesh().size();
+    const int    n  = m_nbSlices->value();
+    const float gap = float(m_gapThick->value());
+    // Le preview garde les proportions, mais l'objet physique monte au mur inclut les vides :
+    // sur l'axe de coupe, profondeur reelle = n lamelles + (n-1) vides.
+    const float assembledAxis = float(n) * float(m_sliceThick->value())
+                                + (n > 1 ? n - 1 : 0) * gap;
+    float dim[3] = { sz.x * s, sz.y * s, sz.z * s };
+    dim[m_axisCombo->currentIndex()] = assembledAxis;
+    m_scaleLabel->setText(tr("%1 mm/u").arg(s, 0, 'f', 3));
+    m_sizeLabel->setText(tr("%1 × %2 × %3 mm")
+                         .arg(dim[0], 0, 'f', 1)
+                         .arg(dim[1], 0, 'f', 1)
+                         .arg(dim[2], 0, 'f', 1));
+    QString info = tr("Lamelle : %1 mm\nPièces : %2 — Feuilles : %3")
+                    .arg(m_slicer.thickness() * s, 0, 'f', 2)
                     .arg(m_plan.pieceCount())
-                    .arg(m_plan.sheetCount()));
+                    .arg(m_plan.sheetCount());
+
+    // Alerte : lamelles ne touchant pas le socle (impossible a accrocher).
+    if (m_genBoard->isChecked()) {
+        const std::vector<int> &fl = m_plan.floatingSlices();
+        if (!fl.empty()) {
+            QStringList nums;
+            for (size_t i = 0; i < fl.size() && i < 12; i++) nums << QString::number(fl[i]);
+            QString list = nums.join(", ");
+            if (fl.size() > 12) list += "…";
+            info += tr("\n⚠ %1 lamelle(s) sans contact avec le fond : %2")
+                        .arg(int(fl.size())).arg(list);
+        }
+    }
+    m_info->setText(info);
 }
 //-----------------------------------------------------------------------------------------------
 void CMainWindow::onExport(void) {
@@ -194,7 +187,6 @@ void CMainWindow::onExport(void) {
     if (base.isEmpty())
         return;
 
-    // On retire une eventuelle extension : l'export ajoute _sheetN.svg / _sheetN.dxf.
     QFileInfo fi(base);
     if (!fi.suffix().isEmpty())
         base = base.left(base.length() - fi.suffix().length() - 1);

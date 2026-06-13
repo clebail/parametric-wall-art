@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>450</width>
-    <height>450</height>
+    <width>960</width>
+    <height>600</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -18,46 +18,360 @@
     <normaloff>:/icons/appicon.png</normaloff>:/icons/appicon.png</iconset>
   </property>
   <widget class="QWidget" name="centralWidget">
-   <layout class="QVBoxLayout" name="verticalLayout">
+   <layout class="QHBoxLayout" name="mainLayout" stretch="0,1">
+    <!-- Panneau de controle gauche -->
     <item>
-     <widget class="C3dView" name="w3d" native="true">
-      <property name="sizePolicy">
-       <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-        <horstretch>0</horstretch>
-        <verstretch>0</verstretch>
-       </sizepolicy>
-      </property>
+     <widget class="QWidget" name="controlPanel">
+      <layout class="QVBoxLayout" name="panelLayout">
+       <item>
+        <widget class="QPushButton" name="m_importBtn">
+         <property name="text">
+          <string>Importer STL…</string>
+         </property>
+        </widget>
+       </item>
+       <!-- Groupe Découpe -->
+       <item>
+        <widget class="QGroupBox" name="groupCut">
+         <property name="title">
+          <string>Découpe</string>
+         </property>
+         <layout class="QFormLayout" name="formCut">
+          <property name="fieldGrowthPolicy">
+           <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
+          </property>
+          <item row="0" column="0">
+           <widget class="QLabel" name="labelAxis">
+            <property name="text">
+             <string>Axe de coupe</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="QComboBox" name="m_axisCombo">
+            <item>
+             <property name="text">
+              <string>X</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Y</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Z</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+          <item row="1" column="0">
+           <widget class="QLabel" name="labelSlices">
+            <property name="text">
+             <string>Nb lamelles</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QSpinBox" name="m_nbSlices">
+            <property name="minimum">
+             <number>1</number>
+            </property>
+            <property name="maximum">
+             <number>999</number>
+            </property>
+            <property name="value">
+             <number>30</number>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="0">
+           <widget class="QLabel" name="labelGapThick">
+            <property name="text">
+             <string>Épaisseur vide</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QDoubleSpinBox" name="m_gapThick">
+            <property name="enabled">
+             <bool>false</bool>
+            </property>
+            <property name="suffix">
+             <string> mm</string>
+            </property>
+            <property name="minimum">
+             <double>1.000000000000000</double>
+            </property>
+            <property name="maximum">
+             <double>500.000000000000000</double>
+            </property>
+            <property name="decimals">
+             <number>1</number>
+            </property>
+            <property name="value">
+             <double>1.000000000000000</double>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="0">
+           <widget class="QLabel" name="labelSliceThick">
+            <property name="text">
+             <string>Épaisseur lamelle</string>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="1">
+           <widget class="QDoubleSpinBox" name="m_sliceThick">
+            <property name="enabled">
+             <bool>false</bool>
+            </property>
+            <property name="suffix">
+             <string> mm</string>
+            </property>
+            <property name="minimum">
+             <double>1.000000000000000</double>
+            </property>
+            <property name="maximum">
+             <double>10000.000000000000000</double>
+            </property>
+            <property name="decimals">
+             <number>2</number>
+            </property>
+            <property name="value">
+             <double>10.000000000000000</double>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="0" colspan="2">
+           <widget class="QCheckBox" name="m_genBoard">
+            <property name="toolTip">
+             <string>Génère une planche de fond perpendiculaire à l'axe de coupe, avec des fentes pour accrocher les lamelles.</string>
+            </property>
+            <property name="text">
+             <string>Générer planche de fond</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <!-- Groupe Matériau / feuille -->
+       <item>
+        <widget class="QGroupBox" name="groupMat">
+         <property name="title">
+          <string>Matériau / feuille (mm)</string>
+         </property>
+         <layout class="QFormLayout" name="formMat">
+          <property name="fieldGrowthPolicy">
+           <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
+          </property>
+          <item row="0" column="0">
+           <widget class="QLabel" name="labelScale">
+            <property name="text">
+             <string>Échelle (mm/unité)</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="QLabel" name="m_scaleLabel">
+            <property name="text">
+             <string>—</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0">
+           <widget class="QLabel" name="labelFinalSize">
+            <property name="text">
+             <string>Taille finale</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QLabel" name="m_sizeLabel">
+            <property name="text">
+             <string>—</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="0">
+           <widget class="QLabel" name="labelSheetW">
+            <property name="text">
+             <string>Largeur feuille</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QDoubleSpinBox" name="m_sheetW">
+            <property name="minimum">
+             <double>10.000000000000000</double>
+            </property>
+            <property name="maximum">
+             <double>5000.000000000000000</double>
+            </property>
+            <property name="value">
+             <double>600.000000000000000</double>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="0">
+           <widget class="QLabel" name="labelSheetH">
+            <property name="text">
+             <string>Hauteur feuille</string>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="1">
+           <widget class="QDoubleSpinBox" name="m_sheetH">
+            <property name="minimum">
+             <double>10.000000000000000</double>
+            </property>
+            <property name="maximum">
+             <double>5000.000000000000000</double>
+            </property>
+            <property name="value">
+             <double>400.000000000000000</double>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="0">
+           <widget class="QLabel" name="labelMargin">
+            <property name="text">
+             <string>Marge bord</string>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="1">
+           <widget class="QDoubleSpinBox" name="m_margin">
+            <property name="minimum">
+             <double>0.000000000000000</double>
+            </property>
+            <property name="maximum">
+             <double>500.000000000000000</double>
+            </property>
+            <property name="value">
+             <double>10.000000000000000</double>
+            </property>
+           </widget>
+          </item>
+          <item row="5" column="0">
+           <widget class="QLabel" name="labelSpacing">
+            <property name="text">
+             <string>Espacement pièces</string>
+            </property>
+           </widget>
+          </item>
+          <item row="5" column="1">
+           <widget class="QDoubleSpinBox" name="m_spacing">
+            <property name="minimum">
+             <double>0.000000000000000</double>
+            </property>
+            <property name="maximum">
+             <double>500.000000000000000</double>
+            </property>
+            <property name="value">
+             <double>5.000000000000000</double>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="m_exportBtn">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <property name="text">
+          <string>Exporter plan de découpe…</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="m_info">
+         <property name="text">
+          <string>Aucun modèle importé.</string>
+         </property>
+         <property name="wordWrap">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <spacer name="panelSpacer">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>20</width>
+           <height>40</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+      </layout>
      </widget>
     </item>
+    <!-- Vue 3D + luminosité -->
     <item>
-     <layout class="QHBoxLayout" name="brightnessLayout">
-      <item>
-       <widget class="QLabel" name="labelBrightness">
-        <property name="text">
-         <string>Luminosité</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QSlider" name="sliderBrightness">
-        <property name="toolTip">
-         <string>Luminosité de l'éclairage</string>
-        </property>
-        <property name="minimum">
-         <number>20</number>
-        </property>
-        <property name="maximum">
-         <number>200</number>
-        </property>
-        <property name="value">
-         <number>100</number>
-        </property>
-        <property name="orientation">
-         <enum>Qt::Horizontal</enum>
-        </property>
-       </widget>
-      </item>
-     </layout>
+     <widget class="QWidget" name="rightWidget">
+      <layout class="QVBoxLayout" name="rightLayout" stretch="1,0">
+       <property name="leftMargin">
+        <number>0</number>
+       </property>
+       <property name="topMargin">
+        <number>0</number>
+       </property>
+       <property name="rightMargin">
+        <number>0</number>
+       </property>
+       <property name="bottomMargin">
+        <number>0</number>
+       </property>
+       <item>
+        <widget class="C3dView" name="w3d" native="true">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="brightnessLayout">
+         <item>
+          <widget class="QLabel" name="labelBrightness">
+           <property name="text">
+            <string>Luminosité</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QSlider" name="sliderBrightness">
+           <property name="toolTip">
+            <string>Luminosité de l'éclairage</string>
+           </property>
+           <property name="minimum">
+            <number>20</number>
+           </property>
+           <property name="maximum">
+            <number>200</number>
+           </property>
+           <property name="value">
+            <number>100</number>
+           </property>
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+      </layout>
+     </widget>
     </item>
    </layout>
   </widget>
@@ -85,6 +399,8 @@
    <container>1</container>
   </customwidget>
  </customwidgets>
- <resources/>
+ <resources>
+  <include location="parametric-wall-art.qrc"/>
+ </resources>
  <connections/>
 </ui>
