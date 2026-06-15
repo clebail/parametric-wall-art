@@ -359,6 +359,16 @@ coupe X) ; socle **perpendiculaire aux lamelles** = le long de l'axe de coupe (l
   plan arrière) + les **tenons** des lamelles en contact (boîtes texturées), en unités modèle via
   `emitBox()`/`emitQuad()`. Mêmes constantes `BoardJoint` /échelle → cohérent avec l'export.
 
+### Outils de génération de STL de test
+- `tests/gen_cube_stl.py` / `gen_sphere_stl.py` / `gen_teapot_stl.py` — modèles paramétriques.
+- `tests/svg2stl.py` (nouveau) — **convertit un SVG au trait en STL extrudé** : échantillonne
+  chaque path (`svgpathtools`, 40 pts/segment, dédoublonnage), épaissit les traits en rubans
+  (`shapely` `buffer(width/2)`), fusionne (`unary_union`), extrude en profondeur (`trimesh
+  extrude_polygon`), miroite l'axe Y (SVG = Y vers le bas) et recale l'origine en bas. Usage :
+  `python3 tests/svg2stl.py in.svg out.stl --width 1.0 --depth 3.0` (largeur trait / profondeur
+  en mm). Affiche dimensions, nb triangles, `watertight`. Dépendances : `numpy`, `svgpathtools`,
+  `shapely`, `trimesh`. Exemple fourni : `tests/tornade.svg` → `tests/tornade.stl`.
+
 ### À améliorer plus tard (TODO)
 - **Position du socle** : actuellement figée au plan arrière (u mini global). Beaucoup de lamelles
   d'un modèle organique (ex. bec/anse de la théière) seront « flottantes » → revoir : socle
