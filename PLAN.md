@@ -556,6 +556,30 @@ partagé aperçu (`C3dView`) + export (`CCutPlan`) :
   en mm). Affiche dimensions, nb triangles, `watertight`. Dépendances : `numpy`, `svgpathtools`,
   `shapely`, `trimesh`. Exemple fourni : `tests/tornade.svg` → `tests/tornade.stl`.
 
+### Relief 3D sur silhouette plate — `tests/bulge_stl.py` (fait — v1, à améliorer)
+- Besoin : `tornade.stl` est un **prisme plat** (profondeur Z uniforme 30 mm) ; le trancher donne des
+  lamelles toutes à la même profondeur (pas le bombé organique d'un vrai art mural). On veut donner du
+  **relief 3D** à la silhouette avant de la trancher.
+- `tests/bulge_stl.py` (nouveau) : lit un STL plat (extrusion d'un contour) et écrit un **nouveau** STL
+  **dos plat (Z=0, côté mur) + face avant bombée** (coupole). `tornade.stl` reste intact.
+  - Silhouette 2D = **union shapely des triangles projetés** (pas de `networkx`, donc on évite
+    `trimesh.section`/`fix_normals` qui en dépendent dans le venv `/tmp/tpv`).
+  - Distance au bord (`scipy.ndimage.distance_transform_edt`) → hauteur `z = A·√(1−(1−d/D)²)`
+    (coupole en demi-ellipse : 0 sur le contour, A au cœur). `D` déf. = demi-épaisseur max.
+  - Maillage fermé : **Delaunay** (`scipy.spatial`) des points intérieurs (grille) + contour
+    rééchantillonné, triangles à centroïde hors silhouette jetés ; faces avant (CCW→+Z) + dos
+    (winding inverse→−Z) + parois latérales (boucle de bord en CCW). Winding géré à la main.
+  - Usage : `python3 tests/bulge_stl.py in.stl out.stl [--amp 80] [--radius D] [--res 4]`.
+  - Résultat `tornade.stl --amp 80 --res 4` → **`tests/tornade_relief.stl`** : 372×939×**80 mm**,
+    54 828 tris, **0 arête ouverte / 1 corps** (juste 4 arêtes degré-4 = 2 points de pincement du
+    tourbillon, non-manifold mais sans effet sur le slicing/Blender).
+  - ⚠ La `tornade.stl` étant un **bloc plein** (`svg2stl --fill`), on obtient **une seule grande
+    coupole**, pas des tubes-par-bras comme la photo de réf. — inhérent à la forme de départ.
+  - Dépendance ajoutée au venv `/tmp/tpv` pour l'aperçu : `matplotlib` (heightmap + profil de côté).
+- **Décision utilisateur** : il va **tenter de faire mieux le relief sous Blender** (forme plus
+  organique, tubes/nervures comme la photo) et reviendra ensuite. `bulge_stl.py` reste le fallback
+  procédural. → reprendre quand il aura son STL Blender.
+
 ### À améliorer plus tard (TODO)
 - **Position du socle** : actuellement figée au plan arrière (u mini global). Beaucoup de lamelles
   d'un modèle organique (ex. bec/anse de la théière) seront « flottantes » → revoir : socle
