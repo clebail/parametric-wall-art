@@ -592,3 +592,93 @@ partagé aperçu (`C3dView`) + export (`CCutPlan`) :
   alignées avec les tenons à l'assemblage.
 - ~~Avertissement `QWheelEvent::delta` toujours présent~~ → **corrigé** : `wheelEvent` utilise
   désormais `event->angleDelta().y()` (API non dépréciée Qt 5.15). Build sans aucun warning.
+
+---
+
+## Modèle 3D « tornade » paramétrique sous Blender — `tests/gen_tornade3d.py` (EN COURS)
+
+> **REPRISE 2026-06-18** : point exact d'arrêt du 2026-06-17. Le générateur marche, l'aperçu
+> ressemble bien à la réf ; **la dernière modif (épaisseur + débord) est éditée mais PAS encore
+> re-rendue/vérifiée** → 1re action demain : relancer le rendu (voir §Reprise — commandes).
+
+### But
+Créer un **vrai modèle 3D paramétrique** de la sculpture murale « tornade » (et non plus une
+silhouette 2D bombée comme `svg2stl.py` + `bulge_stl.py`). Référence = **`tornade.mp4`** (14 s, à la
+racine du repo) : pièce **horizontale allongée**, relief mural **à dos plat**, faite de lamelles
+verticales ; **deux lobes** bombés reliés par une **taille pincée et torsadée** (effet vortex) ;
+lobe gauche plus gros, une **goutte** qui pend sous le lobe gauche, ça s'effile aux deux bouts.
+(Frames d'analyse extraites via `ffmpeg -i tornade.mp4 -vf fps=... <jpg>` — la frame gros plan « f_04 »
+est la plus parlante : dos plat au mur, bombé qui déborde, planches qui s'évasent à la taille.)
+
+### Environnement
+- **Blender 3.4.1** installé. API STL ancienne : `bpy.ops.import_mesh.stl` / `export_mesh.stl` (le
+  script gère aussi la nouvelle `wm.stl_import/export`). Le script active `io_mesh_stl` si besoin.
+- `trimesh`/`shapely` **absents** du Python système → on passe par le Python embarqué de Blender
+  (numpy dispo). D'où le choix `bpy` et pas `trimesh` pour ce générateur.
+- Lancement **headless** : `blender --background --python tests/gen_tornade3d.py -- <args>`.
+- ⚠ Rendu : build Blender **sans OpenImageDenoiser** → `scene.cycles.use_denoising = False` (sinon
+  `RuntimeError: Build without OpenImageDenoiser`). Caméra : `clip_end = 10000` (objet à ~1200-1300 u,
+  far-clip défaut 1000 le rendait invisible → écran gris/noir au début, bug corrigé).
+
+### Conventions de repère (alignées projet, cf. `bulge_stl.py` « dos plat Z=0 »)
+- **X** = grande dimension horizontale = **axe de coupe** (lamelles verticales). Dans l'appli : coupe **X**.
+- **Y** = hauteur (silhouette de face). **Z** = profondeur (hors du mur), **dos plat à Z=0**.
+- Objet placé dans l'**octant positif** (min à l'origine), comme les autres STL du projet.
+
+### Architecture du script
+- `PARAMS` (dict en haut) = tout le « design ». Override en `--clé valeur`.
+- `compute_profile(P)` : arrays longitudinaux le long de X + section unitaire. **Toute la forme est
+  ici** :
+  - **Lobes** = somme de 2 gaussiennes (`lobeL_*`, `lobeR_*`) → le **creux entre les deux = taille
+    pincée** naturellement. `floor` = taille mini. `round` (<1) arrondit le sommet des lobes (sinon
+    pics façon nœud papillon).
+  - `hz` = demi-hauteur (Y), `hy` = demi-profondeur (Z) = `size*depth_ratio*env`.
+  - **Torsion** `theta` = torsion globale (`twist`) + bouffée locale à la taille (`swirl`,
+    `swirl_width`, via `tanh`) → le **vortex**.
+  - `cz` = colonne (centre hauteur) : `tilt` + `waist_rise` − `drop` (goutte sous le lobe gauche).
+  - `cd` = **centre de profondeur** = `belly*env` : pousse la section vers l'avant aux lobes → partie
+    la plus large **devant le plan** après coupe → **surplomb/débord**.
+- `section_ring(pr,i)` → points `(hauteur Y, profondeur Z)` de la section i, **tournée** par `theta`.
+  Couper en Z **ne touche pas** la hauteur Y → la torsion reste visible comme un bombé avant qui
+  tourne (sans manger la silhouette).
+- `build_solid(P)` : loft des sections (rings + 2 apex) → volume plein étanche.
+- `build_lamellae(P, n, gap)` : **aperçu du PRODUIT FINI** = N planches plates espacées (= ce que fera
+  le slicer). Pour juger le vrai rendu, pas pour exporter le livrable.
+- `make_object(verts, faces, flat_back=True)` : mesh + `remove_doubles` + **tronque au plan X,Y (Z=0)**
+  via `bmesh.ops.bisect_plane(plane_no=(0,0,1), clear_inner=True)` + `holes_fill` (= **dos plat**) +
+  recalc normales + **place en octant positif**. `--full` désactive le dos plat.
+- `render_preview(obj, png)` : Cycles CPU, vue 3/4 de face (caméra +Z, légère contre-plongée),
+  `view_transform='Standard'`, soleil avant-haut. **Best-effort** (juste pour comparer à la vidéo).
+- Args : `out` (STL), `--preview <png>`, `--lamellae N`, `--gap f`, `--full`, + tous les `PARAMS`.
+
+### État / ce qui marche
+- STL généré OK, **dos plat**, dims ~**820 × 268 × 80 mm** (X × Y × Z).
+- Aperçu **lamelles** (`--lamellae 70 --gap 0.45`) : **ressemble bien à la réf** (2 lobes, taille
+  torsadée façon vortex, compo horizontale). Validé « pas mal » par l'utilisateur.
+- Le solide brut seul paraît fade : **normal**, l'effet vient du tranchage → toujours juger via
+  `--lamellae` (ou en tranchant le STL dans l'appli).
+
+### DERNIÈRE MODIF (éditée, NON re-rendue) — à vérifier en 1er demain
+Retour utilisateur : « le tout un poil **plus épais** » + « par endroits les **lobes un poil plus
+larges que le plan** » (surplomb). Appliqué dans `PARAMS` :
+- `depth_ratio` 0.52 → **0.66** (plus épais).
+- ajout de **`belly: 34.0`** (débord/surplomb aux lobes ; via `cd` dans `compute_profile` +
+  `section_ring`).
+→ **PAS encore re-rendu.** Vérifier épaisseur + débord, ajuster `depth_ratio` / `belly`.
+
+### Reprise — commandes
+```bash
+# Aperçu produit fini (le bon juge visuel) — regarder /tmp/t_lam.png :
+blender --background --python tests/gen_tornade3d.py -- /tmp/lam.stl \
+        --lamellae 70 --gap 0.45 --preview /tmp/t_lam.png
+# STL livrable (solide dos plat, à trancher dans l'appli) :
+blender --background --python tests/gen_tornade3d.py -- tests/tornade3d.stl --preview /tmp/t_solid.png
+```
+
+### TODO tornade3d
+- Vérifier la modif épaisseur+débord ci-dessus ; régler `depth_ratio`/`belly`.
+- Pousser la ressemblance fine : volute haut-gauche, asymétrie des lobes, forme de la goutte.
+- **Trancher `tornade3d.stl` dans l'appli** (axe X) et valider le plan de découpe réel.
+- Nettoyage : `PARAMS["curve_y"]` n'est **plus utilisé** (profondeur gérée par `belly`) → à retirer.
+- Optionnel : peaufiner le cadrage caméra du `--preview`.
+- `tests/gen_tornade3d.py` et `tests/tornade3d.stl` ne sont **pas commités** (untracked).
