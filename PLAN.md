@@ -522,6 +522,30 @@ partagé aperçu (`C3dView`) + export (`CCutPlan`) :
 - État : **« presque bon, suffisant pour le test »** côté utilisateur — il reste un léger débordement
   résiduel dans la zone de l'anse, **à reprendre plus tard**.
 
+### Axe de coupe : Z retiré + planche toujours sur le plan X,Y (fait)
+- **Axe Z supprimé de l'UI** : le combo « Axe de coupe » (`m_axisCombo`, `CMainWindow.ui`) ne propose
+  plus que **X / Y** (un axe de coupe en Z n'a pas de sens pour un art mural). L'enum `CSlicer::Axis`
+  garde `AxisZ` comme cas par défaut inoffensif (non sélectionnable).
+- **Planche de fond toujours sur le plan X,Y** : `u` (profondeur, normale à la planche) = **toujours
+  Z**. `CSlicer::project` : `AxisX → (u=Z, v=Y)` (inchangé) ; `AxisY → (u=Z, v=X)` (était `(u=X,
+  v=Z)`, planche sur Y,Z). Inverse `C3dView::uvTo3D` mis à jour en conséquence (`case 1 : X=v, Y=axisPos,
+  Z=u`). Le reste du pipeline travaille en `(u,v)` donc suit automatiquement (aperçu + export).
+
+### svg2stl : mode `--fill` (volume plein) (fait)
+- Besoin : à partir d'un SVG, obtenir un **volume PLEIN** (pas un dessin au trait en rubans creux)
+  dans lequel **tailler des lamelles**.
+- `tests/svg2stl.py` → option **`--fill`** : chaque path fermé devient un `Polygon`, combinés en
+  **règle pair/impair** (`reduce(symmetric_difference)`) pour gérer d'éventuels trous, puis extrudé
+  en profondeur. Le mode rubans (`buffer`) reste le défaut.
+- **Étanchéité** : l'échantillonnage fin (40 pts/seg) laissait des points quasi colinéaires →
+  triangles dégénérés dans les capots → maillage **non étanche**. Corrigé par un `simplify`
+  automatique (tol = 0.02 % de la plus grande dim, réglable via `--simplify`) + nettoyage
+  post-extrusion (`merge_vertices`, `nondegenerate_faces`, `unique_faces`, `fill_holes`).
+- Résultat `tests/tornade.svg --fill --depth 30` → `tornade.stl` : 372×939×30 mm, **920 tris,
+  watertight=True**. Prisme à fond plat (profondeur uniforme) → entièrement découpable selon X.
+- ⚠ Dépendances supplémentaires de `svg2stl.py` : `svgpathtools`, `shapely` (en plus de `trimesh`,
+  `numpy`). Installées dans le venv `/tmp/tpv` (qui a déjà trimesh/manifold3d/numpy).
+
 ### Outils de génération de STL de test
 - `tests/gen_cube_stl.py` / `gen_sphere_stl.py` / `gen_teapot_stl.py` — modèles paramétriques.
 - `tests/svg2stl.py` (nouveau) — **convertit un SVG au trait en STL extrudé** : échantillonne

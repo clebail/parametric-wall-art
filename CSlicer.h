@@ -34,8 +34,9 @@ public:
     // Epaisseur d'un slab du dernier appel a slice() (= taille_axe / nbSlices).
     float thickness(void) const { return m_thickness; }
 
-    // Projection d'un point 3D dans le plan 2D (u,v) selon l'axe de coupe.
-    //   AxisX -> (u=Z, v=Y) ; AxisY -> (u=X, v=Z) ; AxisZ -> (u=X, v=Y).
+    // Projection d'un point 3D dans le plan 2D (u,v) selon l'axe de coupe. u = profondeur (normale
+    // a la planche de fond) = TOUJOURS Z -> la planche est toujours sur le plan X,Y.
+    //   AxisX -> (u=Z, v=Y) ; AxisY -> (u=Z, v=X).
     static SPoint2 project(const SVec3 &p, Axis axis);
 
     // Aire signee d'un contour (>0 : sens trigo / CCW, <0 : sens horaire / CW).

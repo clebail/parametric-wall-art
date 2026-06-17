@@ -9,9 +9,10 @@
 // orientees pour que les planches tiennent "debout, cote a cote" le long de l'axe choisi.
 SPoint2 CSlicer::project(const SVec3 &p, Axis axis) {
     switch (axis) {
+        // u = profondeur (normale a la planche de fond) : TOUJOURS Z -> planche sur le plan X,Y.
         case AxisX: return SPoint2(p.z, p.y);  // u=Z, v=Y
-        case AxisY: return SPoint2(p.x, p.z);  // u=X, v=Z
-        default:    return SPoint2(p.x, p.y);  // AxisZ : u=X, v=Y
+        case AxisY: return SPoint2(p.z, p.x);  // u=Z, v=X
+        default:    return SPoint2(p.x, p.y);  // AxisZ (retire de l'UI) : u=X, v=Y
     }
 }
 //-----------------------------------------------------------------------------------------------

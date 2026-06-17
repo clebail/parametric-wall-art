@@ -24,7 +24,7 @@ struct TessCtx {
 inline void uvTo3D(int axis, float u, float v, float axisPos, GLdouble out[3]) {
     switch (axis) {
         case 0: out[0] = axisPos; out[1] = v; out[2] = u; break;   // X : Y=v, Z=u
-        case 1: out[0] = u; out[1] = axisPos; out[2] = v; break;   // Y : X=u, Z=v
+        case 1: out[0] = v; out[1] = axisPos; out[2] = u; break;   // Y : X=v, Z=u
         default: out[0] = u; out[1] = v; out[2] = axisPos; break;  // Z : X=u, Y=v
     }
 }
