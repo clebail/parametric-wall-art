@@ -359,6 +359,169 @@ coupe X) ; socle **perpendiculaire aux lamelles** = le long de l'axe de coupe (l
   plan arrière) + les **tenons** des lamelles en contact (boîtes texturées), en unités modèle via
   `emitBox()`/`emitQuad()`. Mêmes constantes `BoardJoint` /échelle → cohérent avec l'export.
 
+### Planche de fond v3 — intégrée dans la profondeur (fait)
+- **La planche ne rallonge plus l'objet** : elle s'intègre dans la profondeur du modèle. Le dos
+  des lamelles en contact est **raboté de l'épaisseur planche** (`t`), sauf au niveau des
+  **tenons** qui ressortent jusqu'au plan arrière (`u0`) pour s'enficher dans les mortaises. Le
+  volume assemblé garde donc l'enveloppe d'origine (`u0..umax`) au lieu de `u0-t..umax`.
+- **Logique de jointure centralisée dans `geometry.h`** (`namespace BoardJoint`), partagée par
+  l'export et l'aperçu : `clipKeepUGE()` (Sutherland-Hodgman, recule le dos à `u >= uClip`),
+  `insertBackVertex()` (insère un sommet sur l'arête de clip plate pour garantir l'accroche du
+  tenon), `attachTab()` (ex-`attachTenon`, greffe un tenon jusqu'à `uTip`), `tabCenters()`
+  (1 ou 2 tenons selon `kTwoTabMin`). Les anciens helpers locaux de `CCutPlan.cpp` ont été retirés.
+- `CCutPlan::build()` : `xClip = gMinX + t`, `xTip = gMinX` (avant : tenon à `gMinX - t`). Clip du
+  contour extérieur puis greffe des tenons sur une **copie** (lamelle laissée entière si aucun
+  tenon ne s'accroche → flottante). Mortaises et silhouette de la planche inchangées.
+- `C3dView::jointContours()` applique le même rabotage+tenons au rendu ; les tenons font partie
+  des lamelles (extrudés avec elles). `backPlaneU()` factorise le calcul du plan arrière.
+- **Rendu planche tesselé (v3.1)** : `drawBoard()` ne dessine plus des boîtes pleines mais
+  **tessèle une vraie plaque trouée** (`u ∈ [u0, u0+t]`, couleur unie) — faces avant/arrière en
+  règle d'enroulement IMPAIR + parois le long de `u`. Deux corrections visuelles :
+  - **Mortaises visibles** : chaque tenon perce un trou (`t × kTabWidth`) dans la plaque, donc on
+    voit les fentes quand on affiche la planche seule (`boardTabs()` mutualisé avec les lamelles).
+  - **Creux non comblés** : la hauteur de plaque suit les **intervalles v réels** de la tranche
+    (`boardVSpans()` : un intervalle par contour extérieur — orientation = signe du plus grand
+    contour ; trous ignorés ; intervalles disjoints non fusionnés). Fini les pavés blancs qui
+    bouchaient les concavités du modèle dans l'aperçu.
+  - `emitBox`/`emitQuad` retirés (plus utilisés).
+  - ⚠ **Divergence assumée aperçu/export** : l'aperçu suit les intervalles v réels (peut montrer
+    des fentes/creux) ; l'export `CCutPlan` garde la silhouette **englobante** (staircase bbox),
+    donc une planche **connexe et un peu plus généreuse** — sûr pour un support caché derrière.
+- **Alerte non-contact préservée** : `CCutPlan` alimente toujours `floatingSlices()` selon 3
+  conditions (dos hors contact, pas de bande de contact, aucun tenon greffé). `updateInfo()`
+  inchangé. ⚠ tolérance de contact : `tol = t` (modèle) dans l'aperçu vs `max(t,1)` mm à l'export.
+- Vérifié headless (cube/sphère) : profondeur lamelle inchangée (tenon au plan arrière), dos
+  raboté à `x≈t`, FOND = silhouette (cube 40 mortaises = 20×2 tenons, sphère 18 = 20−2 flottantes).
+
+### Planche de fond v2 — silhouette, visibilité, couleur (fait)
+- **Silhouette du modèle** : la planche n'est plus un rectangle plein. Elle épouse la forme du
+  STL = **une colonne par lamelle** (étendue v de la tranche), tuilées le long de l'axe.
+  - `CCutPlan::build()` : le contour extérieur du socle est construit comme un profil en escalier
+    (bord haut gauche→droite sur les `maxy`, bord bas droite→gauche sur les `miny` de chaque
+    colonne `[idx·pitch, (idx+1)·pitch]`, dernière large de `t`), puis la pièce socle est
+    normalisée (bbox→origine, `w`/`h` recalculés). Mortaises inchangées.
+  - `C3dView::drawBoard()` : le socle est rendu en colonnes `emitBox` par lamelle (étendue v),
+    au lieu d'une seule boîte. Vérifié headless : sphère → contour FOND = 80 sommets (vs 4).
+- **Deux cases d'affichage** (`m_showSlices`, `m_showBoard`), **actives uniquement** si
+  « Générer planche de fond » est cochée (sinon désactivées + lamelles toujours visibles) :
+  masquer/afficher les lamelles et la planche dans l'aperçu 3D indépendamment. `C3dView::
+  setSlicesVisible()` (garde le bloc lamelles de `drawSlices`) + `setBoard(enabled,…)` piloté par
+  `m_showBoard`. Logique centralisée dans `CMainWindow::applyBoardPreview()`, slot `onViewChanged`.
+- **Couleur de planche** (pas de texture bois) : `m_boardColorBtn` ouvre un `QColorDialog`
+  (`onBoardColorPick`), **blanc par défaut**, pastille de couleur sur le bouton
+  (`updateBoardColorSwatch`). `C3dView::setBoardColor()` stocke un RGB ; `drawBoard()` désactive
+  la texture et pose la couleur via `glMaterialfv(GL_AMBIENT_AND_DIFFUSE)`, puis restaure le
+  matériau blanc (texture bois) pour le reste de la scène.
+
+### Joint multi-contour : tenons/mortaises sur chaque morceau (corps + anse + bec) (fait)
+- Bug : le code ne tenonnait qu'**un seul** contour par tranche (le plus en arrière). Sur une
+  tranche corps **+ anse** (deux contours extérieurs distincts atteignant le fond), seul le corps
+  recevait tenon + mortaise ; l'anse n'avait ni tenon ni mortaise, et son morceau de planche
+  manquait (l'orientation d'aire du slicer étant **incohérente**, la détection extérieur/trou par
+  le signe ratait l'anse).
+- `geometry.h` : `pointInPolygon()` + `outerContourMask()` — classe extérieur vs trou par
+  **containment** (robuste, indépendant du signe d'aire). `BoardJoint::integrateContourBack()` —
+  rabote+tenonne **un** contour et renvoie les centres v posés (pour les mortaises).
+- `CCutPlan::build()` et `C3dView` (`jointContours`, `sliceTabCenters` ex-`boardTabs`, `boardVSpans`)
+  itèrent désormais sur **tous les contours extérieurs** atteignant le fond → chaque morceau
+  (corps, anse, bec) est raboté, tenonné, et perce sa mortaise. `boardVSpans` utilise aussi
+  `outerContourMask` → plus de morceau de planche manquant. Vérifié : théière, FOND passe à
+  47 contours (mortaises de l'anse incluses), lamelle corps+anse = 2 contours tenonnés.
+
+### Planche de fond — contours lisses, inscrits dans le modèle (fait)
+- Avant : planche en **escalier** (colonnes rectangulaires par tranche, sur tout le pas) →
+  décrochés + dépasse la silhouette du modèle.
+- `geometry.h` : `buildSmoothLobes(slices, capWidth)` — relie les extrémités v **au centre de
+  chaque tranche** par des polylignes (suivi de bandes : chaque span prolonge la bande qui le
+  recouvre le plus en v ; bandes disjointes = corps/anse/bec séparés, creux non comblé). Contour
+  **lisse** et **inscrit** (jamais plus large/haut que le modèle).
+- `C3dView::drawBoard` et `CCutPlan::build` construisent désormais les lobes + mortaises et les
+  tessèlent/exportent en une passe. Vérifié théière : FOND = 2 lobes lisses (sommets en diagonale,
+  zéro décroché), hauteur 172.6 mm < 178.2 mm du modèle (✓ pas plus grand).
+
+### Option forme du fond : Lisse / Escalier (fait)
+- `CCutPlan::Params::boardSmooth` (déf. true) + combo UI **« Forme du fond »** (Lisse / Escalier),
+  actif si planche générée. Transmis à l'aperçu via `C3dView::setBoard(..., smooth, ...)`.
+- **Lisse** : enveloppe connexe + trous de creux (silhouette d'un seul tenant, inscrite).
+- **Escalier (par lamelle)** : même `buildSmoothLobes` avec `treadHalfWidth = t/2`. Liaisons en
+  **vraies marches à angle droit** (palier horizontal à la hauteur précédente + montée verticale,
+  **aucun trait oblique** — vérifié : contour théière = 118 segments horizontaux + 60 verticaux,
+  0 oblique). Fond **connexe d'un seul tenant**, trou de l'anse préservé.
+- **Épaisseur planche = lamelle (aperçu)** : `drawBoard`/`jointContours`/`sliceTabCenters` utilisent
+  `m_sliceThickness` (épaisseur vue d'une lamelle) au lieu de `m_boardThickMm/scale`, sinon la
+  planche paraissait plus épaisse que les lamelles (artefact du pas constant). Export inchangé.
+
+### Export groupé par pièce — SVG `<g>` + DXF blocs (fait)
+- **SVG** : un `<g id="lamelle-N">` par lamelle et un `<g id="fond">` pour la planche (contours +
+  étiquette + numéros). Le miroir Y est appliqué **point par point** (`y→H-y`) au lieu d'un groupe
+  `scale(1,-1)`, pour ne pas miroiter les textes. Vérifié : 30 groupes lamelle + `fond`, XML valide.
+- **DXF** : un **BLOC** R12 par pièce (`lamelle-N` / `fond`), inséré une fois (`INSERT`) → chaque
+  pièce est un groupe sélectionnable, calques `CUT`/`LABEL` conservés à l'intérieur. Vérifié :
+  31 BLOCK/ENDBLK/INSERT appariés, EOF présent.
+
+### Fond d'un seul tenant + numéros de lamelle (fait)
+- **Planche connexe** : `geometry.h::boardEnvelopeAndGaps()` sépare l'**enveloppe** (un span
+  min..max par tranche → un seul lobe reliant corps/anse/bec) et les **trous** (gaps entre spans
+  d'une même tranche, ex. l'ouverture de l'anse). Enveloppe − trous = exactement la silhouette.
+  `drawBoard` et `CCutPlan::build` construisent l'enveloppe (outer) + les trous de creux (+
+  mortaises) et tessèlent/exportent. Vérifié : théière FOND = 1 lobe + 1 trou (anse) + mortaises.
+- **Numéros de lamelle sur le fond** : `CCutPlan::Piece::Mark {x,y,n}` ; une marque par lamelle
+  accrochée (à sa mortaise), normalisée avec la pièce. Export SVG (`<text>` bleu) et DXF (TEXT
+  calque LABEL). Vérifié : théière → 25 numéros sur le fond.
+
+### Filtre des petits îlots (fait)
+- Contours détachés minuscules (ex. section du couvercle isolée) parasitaient le plan de coupe.
+- `geometry.h` : `contourArea()` + `filterSmallIslands(contours, minArea)` — supprime les contours
+  dont |aire| < seuil **en gardant toujours le plus grand** (le corps de la lamelle).
+- `CCutPlan::Params::minIslandArea` (mm²) ; filtrage en phase 1 (contours mis à l'échelle) avant
+  bbox/joint. `C3dView` : `m_minIslandArea` (unités modèle²) + `visibleContours()`, appliqué dans
+  `drawSlices`/`jointContours`/`boardTabs`/`boardVSpans`/`backPlaneU`.
+- UI : `m_minIsland` (« Aire mini îlot », mm², déf. 0 = off). `CMainWindow` convertit mm²→modèle²
+  (`/scale²`) pour l'aperçu et passe `minIslandArea` à l'export. Vérifié : îlot #9 (aire 0.09)
+  filtré dès seuil > 0.09.
+
+### Théière de test refondue — union booléenne propre, bec + anse pleins (fait)
+- L'ancienne théière (ellipsoïdes + bec + anse en **tubes fins ouverts qui s'auto-intersectaient**)
+  donnait un maillage non étanche et des lamelles non accrochables.
+- `tests/gen_teapot_stl.py` réécrit avec **trimesh** : corps + couvercle + bouton (ellipsoïdes) +
+  **bec (tronc de cône plein, `frustum()` triangulé à la main, sans scipy)** + **anse (tore plein)**,
+  le tout **fusionné par union booléenne** (`trimesh.boolean.union`, backend manifold3d) → un seul
+  manifold étanche, sans surface interne (donc pas de contours en double au tranchage).
+- Troncature **au centre** (plan z=0) via **intersection booléenne avec une boîte** (z≥0) : fond
+  plat, chaque section atteint le fond avec une profondeur = épaisseur locale.
+- Résultat (~4458 tris, watertight) : **découpable selon X**, seules ~quelques lamelles d'extrémité
+  du bec/anse (slivers fins) flottent → gérées par le **filtre d'îlots**. Aucun avertissement « non
+  étanche » sur X. Y/Z restent non plats par nature (fond unique en z).
+- **Réglages géométrie actuels** (itérés visuellement) :
+  - **Bec** : `frustum(0.40, 0.27, 1.60)` (allongé), bout **franc** (pas de pointe). Son capot est
+    incliné (⊥ à l'axe du bec) → la troncature **clippe aussi en X** (`x_cut = maxX − 0.22`) pour
+    terminer le bec par une **face verticale** : la dernière lamelle est une coupe pleine, pas un éclat.
+  - **Anse** : tore `major=0.62, minor=0.20` translaté `(-1.15, 0.20, 0)`. Plus petite et **poussée
+    vers −x** pour que sa boucle enferme du vide **hors du corps** → **trou de l'anse visible**, tout
+    en restant fusionnée par son côté intérieur. Sommet plafonné ~y=1.0 (sous le couvercle).
+  - ⚠ **`scale z ×1.8` ANNULÉ** : l'utilisateur l'a retiré (relief à l'épaisseur naturelle).
+- **Dépendances** (nouvelles, pour ce script seulement) : `pip install trimesh manifold3d numpy`
+  (trimesh déjà utilisé par `tests/svg2stl.py` ; manifold3d = backend booléen).
+
+### Planche de fond — ponts bornés au recouvrement (escalier) (fait — « presque bon », à reprendre)
+Trois défauts visuels de la planche (mode escalier) corrigés dans `geometry.h::buildSmoothLobes`,
+partagé aperçu (`C3dView`) + export (`CCutPlan`) :
+- **Vide trop large quand une tranche est sautée** : les positions d'axe encodent l'index réel
+  (`index·(t+gap)`), mais seules les tranches **non vides** entrent dans le tableau. Un index sauté
+  (modèle absent : bout du bec/anse) était enjambé par **un seul long palier** → vide 2× un gap.
+  → param **`maxStep`** (= `pitch·1.5`) : au-delà, on ne ponte pas, la bande se ferme par une **face
+  verticale** et une nouvelle repart.
+- **Planche qui pointe dans le vide au-dessus d'une lamelle courte** : le palier de liaison était
+  posé à la hauteur de la lamelle **précédente** ; près du bouton/anse (lamelle bien plus haute que
+  sa voisine) la planche dépassait dans le gap. → le pont suit désormais le **recouvrement** des
+  deux marches voisines (`top = min` des sommets, `bot = max` des bas) → jamais plus grand que la
+  plus petite des deux voisines.
+- **Planche qui déborde dans un trou** (ouverture de l'anse) : le pont par recouvrement, appliqué à
+  un **trou**, le rétrécissait. → param **`holeMode`** : pour les trous le pont est **inversé**
+  (`top = max`, `bot = min` = **union**) → le trou reste le plus ouvert possible.
+- État : **« presque bon, suffisant pour le test »** côté utilisateur — il reste un léger débordement
+  résiduel dans la zone de l'anse, **à reprendre plus tard**.
+
 ### Outils de génération de STL de test
 - `tests/gen_cube_stl.py` / `gen_sphere_stl.py` / `gen_teapot_stl.py` — modèles paramétriques.
 - `tests/svg2stl.py` (nouveau) — **convertit un SVG au trait en STL extrudé** : échantillonne
@@ -379,4 +542,5 @@ coupe X) ; socle **perpendiculaire aux lamelles** = le long de l'axe de coupe (l
   multiples, contour très concave au dos) → tenon ignoré (lamelle comptée flottante). À durcir.
 - Vérif visuelle réelle de la feature socle (display) : position, nombre de tenons, mortaises
   alignées avec les tenons à l'assemblage.
-- Avertissement `QWheelEvent::delta` toujours présent (pré-existant, non bloquant).
+- ~~Avertissement `QWheelEvent::delta` toujours présent~~ → **corrigé** : `wheelEvent` utilise
+  désormais `event->angleDelta().y()` (API non dépréciée Qt 5.15). Build sans aucun warning.

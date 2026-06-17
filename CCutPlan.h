@@ -21,19 +21,29 @@ public:
         bool  generateBoard;      // generer une planche de fond (socle a fentes)
         float sliceThickness;     // epaisseur lamelle/socle en mm
         float gapThickness;       // epaisseur vide en mm (pas d'assemblage = lamelle + vide)
+        float minIslandArea;      // aire mini (mm^2) d'un contour ; en dessous -> filtre (sauf le corps)
+        bool  boardSmooth;        // fond lisse (silhouette d'un seul tenant) ; false = escalier par lamelle
         Params(void) : scale(1.0f),
                        sheetW(600.0f), sheetH(400.0f), margin(10.0f), spacing(5.0f),
-                       generateBoard(false), sliceThickness(10.0f), gapThickness(1.0f) {}
+                       generateBoard(false), sliceThickness(10.0f), gapThickness(1.0f),
+                       minIslandArea(0.0f), boardSmooth(true) {}
     };
 
     // Une piece placee sur une feuille : contours en mm, normalises (bbox min a l'origine),
     // a decaler de (tx,ty) sur la feuille.
+    // Etiquette positionnee (numero de lamelle a inscrire sur le fond, pres de sa mortaise).
+    struct Mark {
+        float x, y;   // mm, dans le repere bbox-normalise de la piece
+        int n;        // numero de lamelle
+    };
+
     struct Piece {
         int sliceIndex;                 // numero d'ordre d'assemblage (etiquette ; -1 = planche de fond)
         std::vector<Contour> contours;  // mm, bbox min = (0,0) ; [0] = exterieur, suivants = trous
         float w, h;                     // dimensions bbox en mm
         float tx, ty;                   // position sur la feuille en mm
         int sheet;                      // index de feuille (0-based)
+        std::vector<Mark> marks;        // etiquettes internes (n° de lamelle sur le fond)
     };
 
     CCutPlan(void) : m_sheetCount(0) {}

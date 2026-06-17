@@ -28,41 +28,6 @@ inline void uvTo3D(int axis, float u, float v, float axisPos, GLdouble out[3]) {
         default: out[0] = u; out[1] = v; out[2] = axisPos; break;  // Z : X=u, Y=v
     }
 }
-// Quad texture (UV bois planaire) avec normale calculee par produit vectoriel.
-void emitQuad(const GLdouble A[3], const GLdouble B[3], const GLdouble C[3], const GLdouble D[3],
-              float mnx, float mny, float szx, float szy) {
-    const double ux = B[0]-A[0], uy = B[1]-A[1], uz = B[2]-A[2];
-    const double vx = D[0]-A[0], vy = D[1]-A[1], vz = D[2]-A[2];
-    double nx = uy*vz - uz*vy, ny = uz*vx - ux*vz, nz = ux*vy - uy*vx;
-    const double l = std::sqrt(nx*nx + ny*ny + nz*nz);
-    if (l > 1e-12) { nx /= l; ny /= l; nz /= l; }
-    glNormal3d(nx, ny, nz);
-    const GLdouble *q[4] = { A, B, C, D };
-    for (int i = 0; i < 4; i++) {
-        const float tu = szx > 1e-6f ? (float(q[i][0]) - mnx) / szx : 0.0f;
-        const float tv = szy > 1e-6f ? (float(q[i][1]) - mny) / szy : 0.0f;
-        glTexCoord2f(tu, tv);
-        glVertex3dv(q[i]);
-    }
-}
-// Boite alignee dans le repere (u, v, axe) -> 6 faces texturees.
-void emitBox(int ai, float uLo, float uHi, float vLo, float vHi, float aLo, float aHi,
-             float mnx, float mny, float szx, float szy) {
-    const float us[2] = { uLo, uHi }, vs[2] = { vLo, vHi }, as[2] = { aLo, aHi };
-    GLdouble c[2][2][2][3];
-    for (int iu = 0; iu < 2; iu++)
-        for (int iv = 0; iv < 2; iv++)
-            for (int ia = 0; ia < 2; ia++)
-                uvTo3D(ai, us[iu], vs[iv], as[ia], c[iu][iv][ia]);
-    glBegin(GL_QUADS);
-    emitQuad(c[0][0][0], c[0][1][0], c[0][1][1], c[0][0][1], mnx, mny, szx, szy);  // u=lo
-    emitQuad(c[1][0][0], c[1][0][1], c[1][1][1], c[1][1][0], mnx, mny, szx, szy);  // u=hi
-    emitQuad(c[0][0][0], c[0][0][1], c[1][0][1], c[1][0][0], mnx, mny, szx, szy);  // v=lo
-    emitQuad(c[0][1][0], c[1][1][0], c[1][1][1], c[0][1][1], mnx, mny, szx, szy);  // v=hi
-    emitQuad(c[0][0][0], c[1][0][0], c[1][1][0], c[0][1][0], mnx, mny, szx, szy);  // a=lo
-    emitQuad(c[0][0][1], c[0][1][1], c[1][1][1], c[1][0][1], mnx, mny, szx, szy);  // a=hi
-    glEnd();
-}
 void CALLBACK tessBegin(GLenum type, void *) { glBegin(type); }
 void CALLBACK tessEnd(void *) { glEnd(); }
 void CALLBACK tessVertex(void *vd, void *pd) {
@@ -94,10 +59,15 @@ C3dView::C3dView(QWidget *parent) : QGLWidget(parent) {
     m_sliceAxis = CSlicer::AxisX;
     m_sliceThickness = m_sliceGap = 0.0f;
     m_sliceMode = false;
+    m_showSlices = true;
     m_sliceFitScale = 1.0f;
     m_boardEnabled = false;
+    m_boardVisible = false;
+    m_boardSmooth = true;
     m_boardScale = 1.0f;
     m_boardThickMm = 10.0f;
+    m_boardColor[0] = m_boardColor[1] = m_boardColor[2] = 1.0f;   // blanc par defaut
+    m_minIslandArea = 0.0f;
 }
 //-----------------------------------------------------------------------------------------------
 C3dView::~C3dView(void) {
@@ -268,7 +238,7 @@ void C3dView::drawAxisIndicator(void) {
 }
 //-----------------------------------------------------------------------------------------------
 void C3dView::wheelEvent(QWheelEvent * event) {
-    event->delta() > 0 ? scale += scale*0.1f : scale -= scale*0.1f;
+    event->angleDelta().y() > 0 ? scale += scale*0.1f : scale -= scale*0.1f;
     updateGL();
 }
 //-----------------------------------------------------------------------------------------------
@@ -331,11 +301,37 @@ void C3dView::clearSlices(void) {
     updateGL();
 }
 //-----------------------------------------------------------------------------------------------
-void C3dView::setBoard(bool enabled, float scaleMmPerUnit, float thicknessMm) {
-    m_boardEnabled = enabled;
+void C3dView::setBoard(bool generated, bool plateVisible, bool smooth,
+                       float scaleMmPerUnit, float thicknessMm) {
+    m_boardEnabled = generated;
+    m_boardVisible = plateVisible;
+    m_boardSmooth  = smooth;
     m_boardScale   = scaleMmPerUnit > 0 ? scaleMmPerUnit : 1.0f;
     m_boardThickMm = thicknessMm > 0 ? thicknessMm : 1.0f;
     updateGL();
+}
+//-----------------------------------------------------------------------------------------------
+void C3dView::setSlicesVisible(bool visible) {
+    m_showSlices = visible;
+    updateGL();
+}
+//-----------------------------------------------------------------------------------------------
+void C3dView::setBoardColor(const QColor &c) {
+    m_boardColor[0] = float(c.redF());
+    m_boardColor[1] = float(c.greenF());
+    m_boardColor[2] = float(c.blueF());
+    updateGL();
+}
+//-----------------------------------------------------------------------------------------------
+void C3dView::setMinIslandArea(float areaModelUnits) {
+    m_minIslandArea = areaModelUnits > 0.0f ? areaModelUnits : 0.0f;
+    updateGL();
+}
+//-----------------------------------------------------------------------------------------------
+std::vector<Contour> C3dView::visibleContours(const CSlice &sl) const {
+    std::vector<Contour> c = sl.contours;
+    filterSmallIslands(c, m_minIslandArea);
+    return c;
 }
 //-----------------------------------------------------------------------------------------------
 // Fit du mode tranches : l'echelle est basee sur l'etendue reelle de la pile assemblee.
@@ -383,7 +379,9 @@ void C3dView::drawSlices(void) {
     const float halfT = m_sliceThickness * 0.5f;          // demi-epaisseur de la lamelle
     const SVec3 mn = m_mesh.bboxMin();
     const SVec3 sz = m_mesh.size();
+    const float u0Joint = m_boardEnabled ? backPlaneU() : 0.0f;   // plan arriere (rabotage planche)
 
+    if (m_showSlices) {
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, texture);
 
@@ -405,6 +403,13 @@ void C3dView::drawSlices(void) {
         if (sl.contours.empty())
             continue;
 
+        // Planche generee -> dos rabote + tenons ; sinon contours (filtres des petits ilots).
+        std::vector<Contour> base = visibleContours(sl);
+        if (base.empty()) continue;
+        std::vector<Contour> joint;
+        if (m_boardEnabled) joint = jointContours(sl, u0Joint);
+        const std::vector<Contour> &contours = m_boardEnabled ? joint : base;
+
         const float center = lo + (sl.index + 0.5f) * pitch;
         const float front = center + halfT;
         const float back  = center - halfT;
@@ -415,12 +420,12 @@ void C3dView::drawSlices(void) {
         gluTessNormal(tess, nrm[0], nrm[1], nrm[2]);
         {
             size_t total = 0;
-            for (size_t c = 0; c < sl.contours.size(); c++) total += sl.contours[c].size();
+            for (size_t c = 0; c < contours.size(); c++) total += contours[c].size();
             std::vector<GLdouble> buf(3 * (total ? total : 1));
             size_t idx = 0;
             gluTessBeginPolygon(tess, &ctx);
-            for (size_t c = 0; c < sl.contours.size(); c++) {
-                const Contour &ct = sl.contours[c];
+            for (size_t c = 0; c < contours.size(); c++) {
+                const Contour &ct = contours[c];
                 if (ct.size() < 3) continue;
                 gluTessBeginContour(tess);
                 for (size_t k = 0; k < ct.size(); k++) {
@@ -439,12 +444,12 @@ void C3dView::drawSlices(void) {
         gluTessNormal(tess, nrm[0], nrm[1], nrm[2]);
         {
             size_t total = 0;
-            for (size_t c = 0; c < sl.contours.size(); c++) total += sl.contours[c].size();
+            for (size_t c = 0; c < contours.size(); c++) total += contours[c].size();
             std::vector<GLdouble> buf(3 * (total ? total : 1));
             size_t idx = 0;
             gluTessBeginPolygon(tess, &ctx);
-            for (size_t c = 0; c < sl.contours.size(); c++) {
-                const Contour &ct = sl.contours[c];
+            for (size_t c = 0; c < contours.size(); c++) {
+                const Contour &ct = contours[c];
                 if (ct.size() < 3) continue;
                 gluTessBeginContour(tess);
                 for (size_t k = 0; k < ct.size(); k++) {
@@ -458,8 +463,8 @@ void C3dView::drawSlices(void) {
         }
 
         // --- Parois laterales (une bande quad par contour) ---
-        for (size_t c = 0; c < sl.contours.size(); c++) {
-            const Contour &ct = sl.contours[c];
+        for (size_t c = 0; c < contours.size(); c++) {
+            const Contour &ct = contours[c];
             const size_t n = ct.size();
             if (n < 3) continue;
             glBegin(GL_QUAD_STRIP);
@@ -493,14 +498,100 @@ void C3dView::drawSlices(void) {
         delete[] ctx.combined[i];
 
     glDisable(GL_TEXTURE_2D);
+    }   // m_showSlices
 
-    if (m_boardEnabled)
+    if (m_boardEnabled && m_boardVisible)
         drawBoard();   // meme transformation modele (fitScale + recentrage) deja appliquee
 }
 //-----------------------------------------------------------------------------------------------
-// Planche de fond + tenons, en unites modele (memes reperes que drawSlices). Le socle est une
-// plaque le long de l'axe de coupe, au plan arriere (u mini) ; chaque lamelle en contact recoit
-// 1 ou 2 tenons traversant le socle. Dimensions converties des mm via m_boardScale.
+// Plan arriere (u mini) commun a toutes les lamelles, en unites modele.
+float C3dView::backPlaneU(void) const {
+    float u0 = 1e30f;
+    for (size_t s = 0; s < m_slices.size(); s++) {
+        const std::vector<Contour> cs = visibleContours(m_slices[s]);
+        for (size_t c = 0; c < cs.size(); c++)
+            for (size_t k = 0; k < cs[c].size(); k++)
+                u0 = std::min(u0, cs[c][k].x);
+    }
+    return u0;
+}
+//-----------------------------------------------------------------------------------------------
+// Centres (en v) des tenons d'une tranche : 0 si flottante (dos hors contact) ou sans bande de
+// contact exploitable. Mutualise par le rendu des lamelles et celui des mortaises de la planche.
+std::vector<float> C3dView::sliceTabCenters(const CSlice &sl, float u0) const {
+    std::vector<float> all;
+    std::vector<Contour> cs = visibleContours(sl);
+    if (cs.empty()) return all;
+    const float scale = m_boardScale > 0 ? m_boardScale : 1.0f;
+    const float t     = m_sliceThickness;   // dos rabote de l'epaisseur (vue) d'une lamelle
+    const float tol   = t;
+    const float halfW = (BoardJoint::kTabWidth / scale) * 0.5f;
+
+    // Chaque contour EXTERIEUR (corps, anse, bec...) qui touche le fond recoit ses tenons.
+    std::vector<char> outer = outerContourMask(cs);
+    for (size_t c = 0; c < cs.size(); c++) {
+        if (!outer[c]) continue;
+        const std::vector<float> placed = BoardJoint::integrateContourBack(cs[c], u0, t, tol, halfW);
+        all.insert(all.end(), placed.begin(), placed.end());
+    }
+    return all;
+}
+//-----------------------------------------------------------------------------------------------
+// Intervalles v reellement couverts par une tranche : un par contour EXTERIEUR (meme orientation
+// que le plus grand contour), fusionnes. Les trous (orientation opposee) ne reduisent pas la
+// couverture ; les parties disjointes ne sont PAS comblees -> la planche epouse les creux.
+std::vector<std::pair<float, float> > C3dView::boardVSpans(const CSlice &sl) const {
+    std::vector<std::pair<float, float> > spans;
+    const std::vector<Contour> cs = visibleContours(sl);
+    if (cs.empty()) return spans;
+
+    // Un intervalle v par contour EXTERIEUR (containment, pas le signe d'aire) -> n'oublie aucun
+    // morceau disjoint (anse, bec) et ne comble pas les trous.
+    const std::vector<char> outer = outerContourMask(cs);
+    for (size_t c = 0; c < cs.size(); c++) {
+        if (!outer[c] || cs[c].size() < 3) continue;
+        float vmin = 1e30f, vmax = -1e30f;
+        for (size_t k = 0; k < cs[c].size(); k++) {
+            vmin = std::min(vmin, cs[c][k].y);
+            vmax = std::max(vmax, cs[c][k].y);
+        }
+        if (vmax > vmin) spans.push_back(std::make_pair(vmin, vmax));
+    }
+
+    std::sort(spans.begin(), spans.end());
+    std::vector<std::pair<float, float> > merged;
+    for (size_t i = 0; i < spans.size(); i++) {
+        if (!merged.empty() && spans[i].first <= merged.back().second)
+            merged.back().second = std::max(merged.back().second, spans[i].second);
+        else
+            merged.push_back(spans[i]);
+    }
+    return merged;
+}
+//-----------------------------------------------------------------------------------------------
+// Contours d'une lamelle, dos rabote de l'epaisseur planche + tenons jusqu'au plan arriere u0
+// (planche integree dans la profondeur). Lamelle flottante (sans contact) -> contours inchanges.
+std::vector<Contour> C3dView::jointContours(const CSlice &sl, float u0) const {
+    std::vector<Contour> out = visibleContours(sl);
+    if (out.empty()) return out;
+
+    const float scale = m_boardScale > 0 ? m_boardScale : 1.0f;
+    const float t     = m_sliceThickness;   // dos rabote de l'epaisseur (vue) d'une lamelle
+    const float tol   = t;
+    const float halfW = (BoardJoint::kTabWidth / scale) * 0.5f;
+
+    // Chaque contour exterieur (corps, anse, bec...) atteignant le fond est rabote + tenonne.
+    const std::vector<char> outer = outerContourMask(out);
+    for (size_t c = 0; c < out.size(); c++)
+        if (outer[c])
+            BoardJoint::integrateContourBack(out[c], u0, t, tol, halfW);
+    return out;
+}
+//-----------------------------------------------------------------------------------------------
+// Planche de fond : plaque unie le long de l'axe de coupe, integree dans la profondeur du modele
+// (u ∈ [u0, u0+t]). Tesselee comme une vraie plaque trouee = silhouette (intervalles v reels, sans
+// combler les creux) percee des MORTAISES la ou passent les tenons -> les fentes sont visibles
+// quand on affiche la planche seule. Couleur unie (pas de texture bois).
 void C3dView::drawBoard(void) {
     if (m_slices.empty())
         return;
@@ -513,71 +604,123 @@ void C3dView::drawBoard(void) {
     const float halfT = m_sliceThickness * 0.5f;
 
     const float scale  = m_boardScale > 0 ? m_boardScale : 1.0f;
-    const float tModel = m_boardThickMm / scale;
-    const float tabW   = BoardJoint::kTabWidth  / scale;
-    const float twoMin = BoardJoint::kTwoTabMin / scale;
-    const float pad    = BoardJoint::kTabPad    / scale;
-    const float tol    = tModel;
+    const float tModel = m_sliceThickness;   // meme epaisseur (vue) qu'une lamelle, cf. ci-dessous
+    const float halfW  = (BoardJoint::kTabWidth / scale) * 0.5f;
 
-    // Plan arriere (u mini), etendue en v, dernier index.
-    float u0 = 1e30f, vmin = 1e30f, vmax = -1e30f;
-    int maxIdx = 0;
-    for (size_t s = 0; s < m_slices.size(); s++) {
-        const CSlice &sl = m_slices[s];
-        if (sl.contours.empty()) continue;
-        maxIdx = std::max(maxIdx, sl.index);
-        for (size_t c = 0; c < sl.contours.size(); c++)
-            for (size_t k = 0; k < sl.contours[c].size(); k++) {
-                u0   = std::min(u0,   sl.contours[c][k].x);
-                vmin = std::min(vmin, sl.contours[c][k].y);
-                vmax = std::max(vmax, sl.contours[c][k].y);
-            }
-    }
-    if (u0 > 1e29f || vmax < vmin)
+    const float u0 = backPlaneU();
+    if (u0 > 1e29f)
         return;
-
-    glEnable(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, texture);
-
-    // Socle.
-    emitBox(ai, u0 - tModel, u0, vmin, vmax, lo, lo + float(maxIdx + 1) * pitch,
-            mn.x, mn.y, sz.x, sz.y);
-
-    // Tenons des lamelles en contact.
-    for (size_t s = 0; s < m_slices.size(); s++) {
-        const CSlice &sl = m_slices[s];
-        if (sl.contours.empty()) continue;
-
-        float minu = 1e30f, cvmin = 1e30f, cvmax = -1e30f;
-        for (size_t c = 0; c < sl.contours.size(); c++)
-            for (size_t k = 0; k < sl.contours[c].size(); k++)
-                minu = std::min(minu, sl.contours[c][k].x);
-        if (minu > u0 + tol) continue;   // lamelle flottante : pas de tenon
-
-        for (size_t c = 0; c < sl.contours.size(); c++)
-            for (size_t k = 0; k < sl.contours[c].size(); k++) {
-                const SPoint2 &p = sl.contours[c][k];
-                if (p.x <= u0 + tol) { cvmin = std::min(cvmin, p.y); cvmax = std::max(cvmax, p.y); }
-            }
-        if (cvmax < cvmin) continue;
-
-        float centers[2]; int nc = 0;
-        if (cvmax - cvmin >= twoMin) {
-            centers[nc++] = cvmin + pad + tabW * 0.5f;
-            centers[nc++] = cvmax - pad - tabW * 0.5f;
-        } else {
-            centers[nc++] = 0.5f * (cvmin + cvmax);
-        }
-
-        const float center = lo + (sl.index + 0.5f) * pitch;
-        for (int ci = 0; ci < nc; ci++) {
-            const float vc = centers[ci];
-            emitBox(ai, u0 - tModel, minu + tModel, vc - tabW * 0.5f, vc + tabW * 0.5f,
-                    center - halfT, center + halfT, mn.x, mn.y, sz.x, sz.y);
-        }
-    }
+    const float uFront = u0 + tModel;
 
     glDisable(GL_TEXTURE_2D);
+    GLfloat boardCol[4] = { m_boardColor[0], m_boardColor[1], m_boardColor[2], 1.0f };
+    glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, boardCol);
+
+    // Direction unitaire de l'axe u (normale des faces de la plaque) en 3D.
+    GLdouble uDir[3]; uvTo3D(ai, 1.0f, 0.0f, 0.0f, uDir);
+
+    GLUtesselator *tess = gluNewTess();
+    gluTessProperty(tess, GLU_TESS_WINDING_RULE, GLU_TESS_WINDING_ODD);
+    gluTessCallback(tess, GLU_TESS_BEGIN_DATA,   (_GLUfuncptr)tessBegin);
+    gluTessCallback(tess, GLU_TESS_END_DATA,     (_GLUfuncptr)tessEnd);
+    gluTessCallback(tess, GLU_TESS_VERTEX_DATA,  (_GLUfuncptr)tessVertex);
+    gluTessCallback(tess, GLU_TESS_COMBINE_DATA, (_GLUfuncptr)tessCombine);
+    TessCtx ctx; ctx.mnx = mn.x; ctx.mny = mn.y; ctx.szx = sz.x; ctx.szy = sz.y;
+
+    // Lobes LISSES de la silhouette (corps / anse / bec separes, creux non comblés) + toutes les
+    // MORTAISES (trous), construits en plan (axe, v) puis tesselles/extrudes en profondeur (u).
+    std::vector<std::pair<float, std::vector<std::pair<float, float> > > > spansBySlice;
+    std::vector<Contour> holes;
+    for (size_t s = 0; s < m_slices.size(); s++) {
+        const CSlice &sl = m_slices[s];
+        if (sl.contours.empty()) continue;
+        const std::vector<std::pair<float, float> > spans = boardVSpans(sl);
+        if (spans.empty()) continue;
+        const float center = lo + (sl.index + 0.5f) * pitch;
+        spansBySlice.push_back(std::make_pair(center, spans));
+        const std::vector<float> centers = sliceTabCenters(sl, u0);
+        for (size_t ci = 0; ci < centers.size(); ci++) {
+            Contour h;
+            h.push_back(SPoint2(center - halfT, centers[ci] - halfW));
+            h.push_back(SPoint2(center + halfT, centers[ci] - halfW));
+            h.push_back(SPoint2(center + halfT, centers[ci] + halfW));
+            h.push_back(SPoint2(center - halfT, centers[ci] + halfW));
+            holes.push_back(h);
+        }
+    }
+
+    // Fond connexe (enveloppe + trous de creux). Lisse = diagonale ; escalier = marches larges de
+    // la lamelle (halfT) -> decrochés. Le trou de l'anse est preserve (bandes gaps separees).
+    std::vector<std::pair<float, std::vector<std::pair<float, float> > > > env, gaps;
+    boardEnvelopeAndGaps(spansBySlice, env, gaps);
+    const float treadHW = m_boardSmooth ? 0.0f : halfT;
+    const float maxStep = pitch * 1.5f;                // au-dela = tranche sautee -> on ne ponte pas
+    std::vector<Contour> cols          = buildSmoothLobes(env,  pitch * 0.5f, treadHW, maxStep, false);
+    const std::vector<Contour> gapHoles = buildSmoothLobes(gaps, pitch * 0.5f, treadHW, maxStep, true);
+    cols.insert(cols.end(), gapHoles.begin(), gapHoles.end());
+    const size_t nOuter = cols.size();                 // les suivants sont des trous (mortaises)
+    cols.insert(cols.end(), holes.begin(), holes.end());
+    if (cols.empty()) { gluDeleteTess(tess); return; }
+
+    // --- Faces avant (u+) et arriere (u-), trouees par les mortaises (regle IMPAIR) ---
+    for (int face = 0; face < 2; face++) {
+        const float depth = face == 0 ? uFront : u0;
+        const double sgn  = face == 0 ? 1.0 : -1.0;
+        glNormal3d(sgn * uDir[0], sgn * uDir[1], sgn * uDir[2]);
+        gluTessNormal(tess, sgn * uDir[0], sgn * uDir[1], sgn * uDir[2]);
+        size_t total = 0;
+        for (size_t c = 0; c < cols.size(); c++) total += cols[c].size();
+        std::vector<GLdouble> buf(3 * (total ? total : 1));
+        size_t idx = 0;
+        gluTessBeginPolygon(tess, &ctx);
+        for (size_t c = 0; c < cols.size(); c++) {
+            if (cols[c].size() < 3) continue;
+            gluTessBeginContour(tess);
+            for (size_t k = 0; k < cols[c].size(); k++) {
+                uvTo3D(ai, depth, cols[c][k].y, cols[c][k].x, &buf[3 * idx]);
+                gluTessVertex(tess, &buf[3 * idx], &buf[3 * idx]);
+                idx++;
+            }
+            gluTessEndContour(tess);
+        }
+        gluTessEndPolygon(tess);
+    }
+
+    // --- Parois (silhouette + bords des mortaises) le long de u ---
+    for (size_t c = 0; c < cols.size(); c++) {
+        const Contour &ct = cols[c];
+        const size_t n = ct.size();
+        if (n < 3) continue;
+        glBegin(GL_QUAD_STRIP);
+        for (size_t k = 0; k <= n; k++) {
+            const SPoint2 &p  = ct[k % n];
+            const SPoint2 &pn = ct[(k + 1) % n];
+            const SPoint2 &pp = ct[(k + n - 1) % n];
+            float tAxis = pn.x - pp.x, tV = pn.y - pp.y;   // tangente en (axe,v)
+            float nAxis = tV, nV = -tAxis;
+            const float len = std::sqrt(nAxis * nAxis + nV * nV);
+            if (len > 1e-9f) { nAxis /= len; nV /= len; }
+            const float dir = (c < nOuter) ? 1.0f : -1.0f;  // trous : normale inversee
+            GLdouble nn[3];
+            uvTo3D(ai, 0.0f, dir * nV, dir * nAxis, nn);
+            glNormal3d(nn[0], nn[1], nn[2]);
+
+            GLdouble vf[3], vb[3];
+            uvTo3D(ai, uFront, p.y, p.x, vf);
+            uvTo3D(ai, u0,     p.y, p.x, vb);
+            glVertex3dv(vf);
+            glVertex3dv(vb);
+        }
+        glEnd();
+    }
+
+    gluDeleteTess(tess);
+    for (size_t i = 0; i < ctx.combined.size(); i++)
+        delete[] ctx.combined[i];
+
+    // Restaure le materiau blanc (texture bois) pour le reste de la scene.
+    GLfloat white[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, white);
 }
 //-----------------------------------------------------------------------------------------------
 void C3dView::drawMesh(void) {

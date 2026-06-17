@@ -3,10 +3,14 @@
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QStringList>
+#include <QColorDialog>
 #include "CMainWindow.h"
 //-----------------------------------------------------------------------------------------------
-CMainWindow::CMainWindow(QWidget *parent) : QMainWindow(parent), m_hasMesh(false) {
+CMainWindow::CMainWindow(QWidget *parent)
+    : QMainWindow(parent), m_hasMesh(false), m_boardColor(Qt::white) {
     setupUi(this);
+    updateBoardColorSwatch();
+    w3d->setBoardColor(m_boardColor);
 
     connect(actionImporter,  SIGNAL(triggered()),              this, SLOT(onImport()));
     connect(sliderBrightness,SIGNAL(valueChanged(int)),        this, SLOT(onBrightnessChanged(int)));
@@ -25,6 +29,12 @@ CMainWindow::CMainWindow(QWidget *parent) : QMainWindow(parent), m_hasMesh(false
     connect(m_spacing, SIGNAL(valueChanged(double)), this, SLOT(onParamsChanged()));
 
     connect(m_genBoard, SIGNAL(toggled(bool)), this, SLOT(onParamsChanged()));
+    connect(m_minIsland, SIGNAL(valueChanged(double)), this, SLOT(onParamsChanged()));
+    connect(m_boardShape, SIGNAL(currentIndexChanged(int)), this, SLOT(onParamsChanged()));
+
+    connect(m_showSlices, SIGNAL(toggled(bool)), this, SLOT(onViewChanged()));
+    connect(m_showBoard,  SIGNAL(toggled(bool)), this, SLOT(onViewChanged()));
+    connect(m_boardColorBtn, SIGNAL(clicked()),  this, SLOT(onBoardColorPick()));
 }
 //-----------------------------------------------------------------------------------------------
 CMainWindow::~CMainWindow() {
@@ -92,7 +102,44 @@ void CMainWindow::onGapChanged(void) {
 }
 //-----------------------------------------------------------------------------------------------
 void CMainWindow::applyBoardPreview(void) {
-    w3d->setBoard(m_genBoard->isChecked(), currentScale(), float(m_sliceThick->value()));
+    const bool boardGen = m_genBoard->isChecked();
+    // Les bascules d'affichage et le choix de couleur ne servent qu'avec une planche.
+    m_showSlices->setEnabled(boardGen);
+    m_showBoard->setEnabled(boardGen);
+    m_boardColorBtn->setEnabled(boardGen);
+    m_boardShape->setEnabled(boardGen);
+
+    // Sans planche, on affiche toujours les lamelles ; sinon on suit les cases. La planche est
+    // generee (= rabote les lamelles) des qu'elle est cochee, mais la plaque n'est dessinee que
+    // si « Afficher la planche » est coche.
+    w3d->setSlicesVisible(!boardGen || m_showSlices->isChecked());
+    w3d->setBoard(boardGen, boardGen && m_showBoard->isChecked(),
+                  m_boardShape->currentIndex() == 0,
+                  currentScale(), float(m_sliceThick->value()));
+
+    // Seuil d'ilot : mm^2 -> unites modele^2 (l'aire se met a l'echelle en s^2).
+    const float s = currentScale();
+    w3d->setMinIslandArea(s > 0.0f ? float(m_minIsland->value()) / (s * s) : 0.0f);
+}
+//-----------------------------------------------------------------------------------------------
+void CMainWindow::onViewChanged(void) {
+    applyBoardPreview();
+}
+//-----------------------------------------------------------------------------------------------
+void CMainWindow::updateBoardColorSwatch(void) {
+    // Pastille de couleur sur le bouton + contraste du texte selon la luminosite.
+    const QString fg = (m_boardColor.lightness() < 128) ? "white" : "black";
+    m_boardColorBtn->setStyleSheet(
+        QString("background-color: %1; color: %2;").arg(m_boardColor.name()).arg(fg));
+}
+//-----------------------------------------------------------------------------------------------
+void CMainWindow::onBoardColorPick(void) {
+    QColor c = QColorDialog::getColor(m_boardColor, this, tr("Couleur de la planche de fond"));
+    if (!c.isValid())
+        return;
+    m_boardColor = c;
+    updateBoardColorSwatch();
+    w3d->setBoardColor(m_boardColor);
 }
 //-----------------------------------------------------------------------------------------------
 void CMainWindow::onParamsChanged(void) {
@@ -131,6 +178,8 @@ CCutPlan::Params CMainWindow::currentParams(void) const {
     p.generateBoard  = m_genBoard->isChecked();
     p.sliceThickness = float(m_sliceThick->value());
     p.gapThickness   = float(m_gapThick->value());
+    p.minIslandArea  = float(m_minIsland->value());
+    p.boardSmooth    = (m_boardShape->currentIndex() == 0);   // 0 = Lisse, 1 = Escalier
     return p;
 }
 //-----------------------------------------------------------------------------------------------

@@ -9,66 +9,6 @@
 #include <QtDebug>
 #include "CCutPlan.h"
 //-----------------------------------------------------------------------------------------------
-// Geometrie des assemblages socle/lamelle : dimensions de tenon/mortaise standardisees.
-namespace {
-using BoardJoint::kTabWidth;
-using BoardJoint::kTwoTabMin;
-using BoardJoint::kTabPad;
-
-inline bool inBand(float y, float vL, float vR) { return y >= vL && y <= vR; }
-
-// Intersection du segment p(dans bande)->q(hors bande) avec la ligne vL ou vR franchie.
-SPoint2 crossY(const SPoint2 &p, const SPoint2 &q, float vL, float vR) {
-    const float Y = (q.y < vL) ? vL : vR;
-    const float d = q.y - p.y;
-    const float t = (std::fabs(d) > 1e-9f) ? (Y - p.y) / d : 0.0f;
-    return SPoint2(p.x + t * (q.x - p.x), Y);
-}
-
-// Greffe un tenon rectangulaire (largeur 2*halfW en v, centre vc) sur le bord arriere (x mini)
-// d'un contour, en le faisant ressortir jusqu'a x = xTip. Retourne false si le bord arriere du
-// contour dans la bande n'est pas exploitable (pas de contact franc).
-bool attachTenon(Contour &c, float xTip, float vc, float halfW) {
-    const float vL = vc - halfW, vR = vc + halfW;
-    const int n = int(c.size());
-    if (n < 3) return false;
-
-    // Sommet le plus en arriere (x mini) situe dans la bande.
-    int dip = -1; float best = 1e30f;
-    for (int i = 0; i < n; i++)
-        if (inBand(c[i].y, vL, vR) && c[i].x < best) { best = c[i].x; dip = i; }
-    if (dip < 0) return false;
-
-    // Sorties de bande en avancant et en reculant le long du contour.
-    int f = dip;
-    while (inBand(c[(f + 1) % n].y, vL, vR)) { f = (f + 1) % n; if (f == dip) return false; }
-    const int fOut = (f + 1) % n;
-    const SPoint2 Pf = crossY(c[f], c[fOut], vL, vR);
-
-    int b = dip;
-    while (inBand(c[(b - 1 + n) % n].y, vL, vR)) { b = (b - 1 + n) % n; if (b == dip) return false; }
-    const int bOut = (b - 1 + n) % n;
-    const SPoint2 Pb = crossY(c[b], c[bOut], vL, vR);
-
-    // Les deux franchissements doivent etre sur des lignes opposees (tenon a embouchure nette)
-    // et le tenon doit reellement ressortir vers l'arriere.
-    if (std::fabs(Pf.y - Pb.y) < halfW) return false;
-    if (xTip >= std::min(Pb.x, Pf.x))   return false;
-
-    // Reconstruit le contour : arc complementaire (hors nub) + contour du tenon.
-    Contour out;
-    out.reserve(n + 4);
-    int i = fOut;
-    while (true) { out.push_back(c[i]); if (i == bOut) break; i = (i + 1) % n; }
-    out.push_back(Pb);
-    out.push_back(SPoint2(xTip, Pb.y));
-    out.push_back(SPoint2(xTip, Pf.y));
-    out.push_back(Pf);
-    c.swap(out);
-    return true;
-}
-} // namespace
-//-----------------------------------------------------------------------------------------------
 bool CCutPlan::build(const std::vector<CSlice> &slices, const Params &params) {
     m_params = params;
     m_pieces.clear();
@@ -95,14 +35,21 @@ bool CCutPlan::build(const std::vector<CSlice> &slices, const Params &params) {
         r.contours.resize(sl.contours.size());
         for (size_t c = 0; c < sl.contours.size(); c++) {
             r.contours[c].reserve(sl.contours[c].size());
-            for (size_t k = 0; k < sl.contours[c].size(); k++) {
-                const float x = sl.contours[c][k].x * s;
-                const float y = sl.contours[c][k].y * s;
-                r.contours[c].push_back(SPoint2(x, y));
+            for (size_t k = 0; k < sl.contours[c].size(); k++)
+                r.contours[c].push_back(SPoint2(sl.contours[c][k].x * s, sl.contours[c][k].y * s));
+        }
+
+        // Filtre les petits ilots (mm^2, contours mis a l'echelle) avant tout calcul de bbox.
+        filterSmallIslands(r.contours, params.minIslandArea);
+        if (r.contours.empty())
+            continue;
+
+        for (size_t c = 0; c < r.contours.size(); c++)
+            for (size_t k = 0; k < r.contours[c].size(); k++) {
+                const float x = r.contours[c][k].x, y = r.contours[c][k].y;
                 r.minx = std::min(r.minx, x); r.maxx = std::max(r.maxx, x);
                 r.miny = std::min(r.miny, y); r.maxy = std::max(r.maxy, y);
             }
-        }
         if (r.maxx < r.minx)
             continue;
         gMinX = std::min(gMinX, r.minx);
@@ -122,70 +69,85 @@ bool CCutPlan::build(const std::vector<CSlice> &slices, const Params &params) {
         const float t    = params.sliceThickness > 0 ? params.sliceThickness : 10.0f;
         const float gap  = params.gapThickness;
         const float tol  = std::max(t, 1.0f);     // tolerance de contact avec le plan du fond
-        const float xTip = gMinX - t;             // pointe du tenon = face arriere du socle
-        const float halfW = kTabWidth * 0.5f;
-
-        int maxIdx = 0;
-        for (size_t i = 0; i < raws.size(); i++) maxIdx = std::max(maxIdx, raws[i].index);
+        const float halfW = BoardJoint::kTabWidth * 0.5f;
 
         std::vector<std::pair<float, float> > mortises;   // (x centre sur le socle, y centre global)
+        std::vector<Mark> marks;                           // numero de lamelle sur le fond
 
         for (size_t i = 0; i < raws.size(); i++) {
             Raw &r = raws[i];
 
-            // Le dos de la lamelle atteint-il le plan du socle ?
+            // Aucun contour n'atteint le plan du socle -> lamelle flottante.
             if (r.minx > gMinX + tol) { m_floating.push_back(r.index); continue; }
 
-            // Contour exterieur = celui dont un sommet atteint le x mini (le plus en arriere).
-            int oc = 0; float omin = big;
-            for (size_t c = 0; c < r.contours.size(); c++)
-                for (size_t k = 0; k < r.contours[c].size(); k++)
-                    if (r.contours[c][k].x < omin) { omin = r.contours[c][k].x; oc = int(c); }
-
-            // Plage de contact (en v) : sommets proches du dos.
-            float cvmin = big, cvmax = -big;
-            for (size_t k = 0; k < r.contours[oc].size(); k++) {
-                const SPoint2 &p = r.contours[oc][k];
-                if (p.x <= gMinX + tol) { cvmin = std::min(cvmin, p.y); cvmax = std::max(cvmax, p.y); }
-            }
-            if (cvmax < cvmin) { m_floating.push_back(r.index); continue; }
-
-            // 1 ou 2 tenons selon la taille de la zone de contact.
-            std::vector<float> centers;
-            if (cvmax - cvmin >= kTwoTabMin) {
-                centers.push_back(cvmin + kTabPad + halfW);
-                centers.push_back(cvmax - kTabPad - halfW);
-            } else {
-                centers.push_back(0.5f * (cvmin + cvmax));
-            }
-
-            const float xPosBoard = r.index * (t + gap) + t * 0.5f;   // position le long du socle
+            // Chaque contour EXTERIEUR (corps, anse, bec...) atteignant le fond est rabote de t et
+            // recoit ses tenons ; chaque tenon donne une mortaise sur le socle (meme position axe).
+            const float xPosBoard = r.index * (t + gap) + t * 0.5f;
+            const std::vector<char> outer = outerContourMask(r.contours);
             int placed = 0;
-            for (size_t ci = 0; ci < centers.size(); ci++)
-                if (attachTenon(r.contours[oc], xTip, centers[ci], halfW)) {
-                    mortises.push_back(std::make_pair(xPosBoard, centers[ci]));
-                    placed++;
+            float firstV = 0.0f; bool haveV = false;
+            for (size_t c = 0; c < r.contours.size(); c++) {
+                if (!outer[c]) continue;
+                const std::vector<float> got =
+                    BoardJoint::integrateContourBack(r.contours[c], gMinX, t, tol, halfW);
+                for (size_t m = 0; m < got.size(); m++) {
+                    mortises.push_back(std::make_pair(xPosBoard, got[m]));
+                    if (!haveV) { firstV = got[m]; haveV = true; }
                 }
-
+                placed += int(got.size());
+            }
             if (placed == 0) m_floating.push_back(r.index);
-            else             r.minx = std::min(r.minx, xTip);
+            else { Mark mk; mk.x = xPosBoard; mk.y = firstV; mk.n = r.index; marks.push_back(mk); }
         }
 
-        // Construit la piece socle : rectangle L x H perce de mortaises standard (t x kTabWidth).
-        const float L = float(maxIdx) * (t + gap) + t;
+        // Construit la piece socle : contour(s) LISSE(S) suivant la silhouette du modele (lobes
+        // inscrits, sans decroche, jamais plus larges/hauts que le modele), perces des mortaises.
         const float H = gMaxY - gMinY;
-        if (H > 0.0f && L > 0.0f && !mortises.empty()) {
+        if (H > 0.0f && !mortises.empty()) {
+            // Spans v (contours exterieurs) par tranche, triees par index, en plan (axe, v).
+            std::vector<Raw*> sorted;
+            for (size_t i = 0; i < raws.size(); i++) sorted.push_back(&raws[i]);
+            std::sort(sorted.begin(), sorted.end(),
+                      [](const Raw *a, const Raw *b){ return a->index < b->index; });
+
+            std::vector<std::pair<float, std::vector<std::pair<float, float> > > > spansBySlice;
+            for (size_t i = 0; i < sorted.size(); i++) {
+                const Raw *r = sorted[i];
+                const std::vector<char> outer = outerContourMask(r->contours);
+                std::vector<std::pair<float, float> > spans;
+                for (size_t c = 0; c < r->contours.size(); c++) {
+                    if (!outer[c] || r->contours[c].size() < 3) continue;
+                    float vmin = big, vmax = -big;
+                    for (size_t k = 0; k < r->contours[c].size(); k++) {
+                        vmin = std::min(vmin, r->contours[c][k].y);
+                        vmax = std::max(vmax, r->contours[c][k].y);
+                    }
+                    if (vmax > vmin) spans.push_back(std::make_pair(vmin, vmax));
+                }
+                if (!spans.empty())
+                    spansBySlice.push_back(std::make_pair(r->index * (t + gap) + t * 0.5f, spans));
+            }
+
+            // Fond connexe (enveloppe + trous de creux). Lisse = liaisons en diagonale ; escalier =
+            // marches plates larges de la lamelle (t) -> decrochés, sans depasser les lamelles.
+            std::vector<std::pair<float, std::vector<std::pair<float, float> > > > env, gaps;
+            boardEnvelopeAndGaps(spansBySlice, env, gaps);
+            const float treadHW = params.boardSmooth ? 0.0f : t * 0.5f;
+            const float maxStep = (t + gap) * 1.5f;   // au-dela = tranche sautee -> on ne ponte pas
+            std::vector<Contour> lobes    = buildSmoothLobes(env,  (t + gap) * 0.5f, treadHW, maxStep, false);
+            std::vector<Contour> gapHoles = buildSmoothLobes(gaps, (t + gap) * 0.5f, treadHW, maxStep, true);
+
+          if (!lobes.empty()) {
             board.sliceIndex = -1;
             board.tx = board.ty = 0; board.sheet = 0;
-            Contour outer;
-            outer.push_back(SPoint2(0, 0)); outer.push_back(SPoint2(L, 0));
-            outer.push_back(SPoint2(L, H)); outer.push_back(SPoint2(0, H));
-            board.contours.push_back(outer);
+            board.marks = marks;
+            for (size_t i = 0; i < lobes.size(); i++)    board.contours.push_back(lobes[i]);
+            for (size_t i = 0; i < gapHoles.size(); i++) board.contours.push_back(gapHoles[i]);
 
             const float halfT = t * 0.5f;
             for (size_t m = 0; m < mortises.size(); m++) {
                 const float xc = mortises[m].first;
-                const float yc = mortises[m].second - gMinY;
+                const float yc = mortises[m].second;
                 Contour hole;
                 hole.push_back(SPoint2(xc - halfT, yc - halfW));
                 hole.push_back(SPoint2(xc + halfT, yc - halfW));
@@ -193,8 +155,28 @@ bool CCutPlan::build(const std::vector<CSlice> &slices, const Params &params) {
                 hole.push_back(SPoint2(xc - halfT, yc + halfW));
                 board.contours.push_back(hole);
             }
-            board.w = L; board.h = H;
+
+            // Normalise la piece socle (bbox -> origine) et fixe w,h pour le nesting.
+            float bminx = big, bminy = big, bmaxx = -big, bmaxy = -big;
+            for (size_t c = 0; c < board.contours.size(); c++)
+                for (size_t k = 0; k < board.contours[c].size(); k++) {
+                    bminx = std::min(bminx, board.contours[c][k].x);
+                    bmaxx = std::max(bmaxx, board.contours[c][k].x);
+                    bminy = std::min(bminy, board.contours[c][k].y);
+                    bmaxy = std::max(bmaxy, board.contours[c][k].y);
+                }
+            for (size_t c = 0; c < board.contours.size(); c++)
+                for (size_t k = 0; k < board.contours[c].size(); k++) {
+                    board.contours[c][k].x -= bminx;
+                    board.contours[c][k].y -= bminy;
+                }
+            for (size_t i = 0; i < board.marks.size(); i++) {
+                board.marks[i].x -= bminx;
+                board.marks[i].y -= bminy;
+            }
+            board.w = bmaxx - bminx; board.h = bmaxy - bminy;
             haveBoard = true;
+          }
         }
     }
 
@@ -303,34 +285,45 @@ bool CCutPlan::writeSVGSheet(const QString &path, int sheet) const {
        << "width=\"" << W << "mm\" height=\"" << H << "mm\" "
        << "viewBox=\"0 0 " << W << " " << H << "\">\n";
 
-    // Contours (repere y-haut).
-    ts << "  <g transform=\"translate(0," << H << ") scale(1,-1)\">\n";
-    ts << "    <rect x=\"0\" y=\"0\" width=\"" << W << "\" height=\"" << H
+    // Bordure de feuille. Le miroir Y (repere physique y-haut -> SVG y-bas) est applique point par
+    // point (y -> H - y) plutot que par un groupe scale(1,-1), pour ne pas miroiter les textes.
+    ts << "  <rect x=\"0\" y=\"0\" width=\"" << W << "\" height=\"" << H
        << "\" fill=\"none\" stroke=\"#888\" stroke-width=\"0.2\"/>\n";
 
+    // Un groupe SVG par piece : <g id="lamelle-N"> ou <g id="fond"> (contours + etiquettes).
     for (size_t i = 0; i < m_pieces.size(); i++) {
         const Piece &p = m_pieces[i];
         if (p.sheet != sheet) continue;
+
+        const QString gid = (p.sliceIndex < 0) ? QString("fond")
+                                               : QString("lamelle-%1").arg(p.sliceIndex);
+        ts << "  <g id=\"" << gid << "\">\n";
+
         for (size_t c = 0; c < p.contours.size(); c++) {
             ts << "    <polygon points=\"";
             for (size_t k = 0; k < p.contours[c].size(); k++)
-                ts << (p.tx + p.contours[c][k].x) << "," << (p.ty + p.contours[c][k].y) << " ";
+                ts << (p.tx + p.contours[c][k].x) << "," << (H - (p.ty + p.contours[c][k].y)) << " ";
             ts << "\" fill=\"none\" stroke=\"#000\" stroke-width=\"0.1\"/>\n";
         }
-    }
-    ts << "  </g>\n";
 
-    // Etiquettes (repere SVG y-bas : on convertit y -> H - y).
-    for (size_t i = 0; i < m_pieces.size(); i++) {
-        const Piece &p = m_pieces[i];
-        if (p.sheet != sheet) continue;
         const float cx = p.tx + p.w * 0.5f;
         const float cy = p.ty + p.h * 0.5f;
         const float fs = std::min(4.0f, std::max(1.0f, p.h * 0.3f));
         const QString label = (p.sliceIndex < 0) ? QString("FOND") : QString::number(p.sliceIndex);
-        ts << "  <text x=\"" << cx << "\" y=\"" << (H - cy)
+        ts << "    <text x=\"" << cx << "\" y=\"" << (H - cy)
            << "\" font-size=\"" << fs << "\" text-anchor=\"middle\" "
            << "dominant-baseline=\"central\" fill=\"#c00\">" << label << "</text>\n";
+
+        // Numeros de lamelle sur le fond (pres de chaque mortaise).
+        for (size_t m = 0; m < p.marks.size(); m++) {
+            const float mx = p.tx + p.marks[m].x;
+            const float my = p.ty + p.marks[m].y;
+            ts << "    <text x=\"" << mx << "\" y=\"" << (H - my)
+               << "\" font-size=\"3\" text-anchor=\"middle\" "
+               << "dominant-baseline=\"central\" fill=\"#00a\">" << p.marks[m].n << "</text>\n";
+        }
+
+        ts << "  </g>\n";
     }
 
     ts << "</svg>\n";
@@ -338,8 +331,9 @@ bool CCutPlan::writeSVGSheet(const QString &path, int sheet) const {
     return true;
 }
 //-----------------------------------------------------------------------------------------------
-// DXF R12 ASCII minimal : section TABLES (calques CUT/LABEL) + ENTITIES (POLYLINE fermees +
-// TEXT). Pas de LWPOLYLINE (R14+), pour compat large laser/CNC.
+// DXF R12 ASCII minimal : calques CUT/LABEL + un BLOC par piece (lamelle-N / fond), insere une
+// fois -> chaque piece est un groupe selectionnable (analogue aux <g> du SVG), les calques
+// CUT/LABEL restant a l'interieur. Pas de LWPOLYLINE (R14+), pour compat large laser/CNC.
 bool CCutPlan::writeDXFSheet(const QString &path, int sheet) const {
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -350,6 +344,40 @@ bool CCutPlan::writeDXFSheet(const QString &path, int sheet) const {
 
     // Paire (code, valeur) DXF.
     #define DXF(code, val) ts << code << "\n" << val << "\n"
+
+    auto blockName = [](const Piece &p) {
+        return (p.sliceIndex < 0) ? QString("fond") : QString("lamelle-%1").arg(p.sliceIndex);
+    };
+    // Entites d'une piece (coordonnees absolues, calques CUT/LABEL).
+    auto emitPiece = [&](const Piece &p) {
+        for (size_t c = 0; c < p.contours.size(); c++) {
+            DXF(0, "POLYLINE"); DXF(8, "CUT"); DXF(66, 1); DXF(70, 1); // 1 = fermee
+            for (size_t k = 0; k < p.contours[c].size(); k++) {
+                DXF(0, "VERTEX"); DXF(8, "CUT");
+                DXF(10, (p.tx + p.contours[c][k].x));
+                DXF(20, (p.ty + p.contours[c][k].y));
+            }
+            DXF(0, "SEQEND"); DXF(8, "CUT");
+        }
+        const float cx = p.tx + p.w * 0.5f;
+        const float cy = p.ty + p.h * 0.5f;
+        const float fs = std::min(4.0f, std::max(1.0f, p.h * 0.3f));
+        const QString label = (p.sliceIndex < 0) ? QString("FOND") : QString::number(p.sliceIndex);
+        DXF(0, "TEXT"); DXF(8, "LABEL");
+        DXF(10, cx); DXF(20, cy); DXF(40, fs);
+        DXF(50, 0); DXF(72, 1); DXF(73, 2);   // alignement horizontal centre / vertical milieu
+        DXF(11, cx); DXF(21, cy);             // point d'alignement (requis si 72/73 != 0)
+        DXF(1, label);
+        for (size_t m = 0; m < p.marks.size(); m++) {   // numeros de lamelle sur le fond
+            const float mx = p.tx + p.marks[m].x;
+            const float my = p.ty + p.marks[m].y;
+            DXF(0, "TEXT"); DXF(8, "LABEL");
+            DXF(10, mx); DXF(20, my); DXF(40, 3.0);
+            DXF(50, 0); DXF(72, 1); DXF(73, 2);
+            DXF(11, mx); DXF(21, my);
+            DXF(1, p.marks[m].n);
+        }
+    };
 
     DXF(0, "SECTION"); DXF(2, "HEADER");
     DXF(9, "$ACADVER"); DXF(1, "AC1009");
@@ -362,30 +390,27 @@ bool CCutPlan::writeDXFSheet(const QString &path, int sheet) const {
     DXF(0, "ENDTAB");
     DXF(0, "ENDSEC");
 
+    // Un bloc par piece (entites a coordonnees absolues, base 0,0).
+    DXF(0, "SECTION"); DXF(2, "BLOCKS");
+    for (size_t i = 0; i < m_pieces.size(); i++) {
+        const Piece &p = m_pieces[i];
+        if (p.sheet != sheet) continue;
+        const QString name = blockName(p);
+        DXF(0, "BLOCK"); DXF(8, "0"); DXF(2, name); DXF(70, 0);
+        DXF(10, 0.0); DXF(20, 0.0); DXF(30, 0.0);
+        DXF(3, name);
+        emitPiece(p);
+        DXF(0, "ENDBLK"); DXF(8, "0");
+    }
+    DXF(0, "ENDSEC");
+
+    // Insertion de chaque bloc (a l'origine : les entites sont deja en absolu).
     DXF(0, "SECTION"); DXF(2, "ENTITIES");
     for (size_t i = 0; i < m_pieces.size(); i++) {
         const Piece &p = m_pieces[i];
         if (p.sheet != sheet) continue;
-
-        for (size_t c = 0; c < p.contours.size(); c++) {
-            DXF(0, "POLYLINE"); DXF(8, "CUT"); DXF(66, 1); DXF(70, 1); // 1 = fermee
-            for (size_t k = 0; k < p.contours[c].size(); k++) {
-                DXF(0, "VERTEX"); DXF(8, "CUT");
-                DXF(10, (p.tx + p.contours[c][k].x));
-                DXF(20, (p.ty + p.contours[c][k].y));
-            }
-            DXF(0, "SEQEND"); DXF(8, "CUT");
-        }
-
-        const float cx = p.tx + p.w * 0.5f;
-        const float cy = p.ty + p.h * 0.5f;
-        const float fs = std::min(4.0f, std::max(1.0f, p.h * 0.3f));
-        const QString label = (p.sliceIndex < 0) ? QString("FOND") : QString::number(p.sliceIndex);
-        DXF(0, "TEXT"); DXF(8, "LABEL");
-        DXF(10, cx); DXF(20, cy); DXF(40, fs);
-        DXF(50, 0); DXF(72, 1); DXF(73, 2);   // alignement horizontal centre / vertical milieu
-        DXF(11, cx); DXF(21, cy);             // point d'alignement (requis si 72/73 != 0)
-        DXF(1, label);
+        DXF(0, "INSERT"); DXF(8, "0"); DXF(2, blockName(p));
+        DXF(10, 0.0); DXF(20, 0.0);
     }
     DXF(0, "ENDSEC");
     DXF(0, "EOF");

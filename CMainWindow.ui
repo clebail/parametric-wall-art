@@ -154,6 +154,114 @@
             </property>
            </widget>
           </item>
+          <item row="5" column="0" colspan="2">
+           <widget class="QCheckBox" name="m_showSlices">
+            <property name="enabled">
+             <bool>false</bool>
+            </property>
+            <property name="toolTip">
+             <string>Affiche ou masque les lamelles dans l'aperçu 3D.</string>
+            </property>
+            <property name="text">
+             <string>Afficher les lamelles</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="6" column="0" colspan="2">
+           <widget class="QCheckBox" name="m_showBoard">
+            <property name="enabled">
+             <bool>false</bool>
+            </property>
+            <property name="toolTip">
+             <string>Affiche ou masque la planche de fond dans l'aperçu 3D.</string>
+            </property>
+            <property name="text">
+             <string>Afficher la planche</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="7" column="0">
+           <widget class="QLabel" name="labelBoardColor">
+            <property name="text">
+             <string>Couleur planche</string>
+            </property>
+           </widget>
+          </item>
+          <item row="7" column="1">
+           <widget class="QPushButton" name="m_boardColorBtn">
+            <property name="enabled">
+             <bool>false</bool>
+            </property>
+            <property name="toolTip">
+             <string>Couleur d'affichage de la planche de fond (pas de texture bois).</string>
+            </property>
+            <property name="text">
+             <string>Choisir…</string>
+            </property>
+           </widget>
+          </item>
+          <item row="8" column="0">
+           <widget class="QLabel" name="labelMinIsland">
+            <property name="text">
+             <string>Aire mini îlot</string>
+            </property>
+           </widget>
+          </item>
+          <item row="8" column="1">
+           <widget class="QDoubleSpinBox" name="m_minIsland">
+            <property name="toolTip">
+             <string>Supprime les petits contours détachés (îlots) dont l'aire est sous ce seuil. 0 = aucun filtrage. Le corps principal de chaque lamelle est toujours conservé.</string>
+            </property>
+            <property name="suffix">
+             <string> mm²</string>
+            </property>
+            <property name="minimum">
+             <double>0.000000000000000</double>
+            </property>
+            <property name="maximum">
+             <double>100000.000000000000000</double>
+            </property>
+            <property name="decimals">
+             <number>1</number>
+            </property>
+            <property name="value">
+             <double>0.000000000000000</double>
+            </property>
+           </widget>
+          </item>
+          <item row="9" column="0">
+           <widget class="QLabel" name="labelBoardShape">
+            <property name="text">
+             <string>Forme du fond</string>
+            </property>
+           </widget>
+          </item>
+          <item row="9" column="1">
+           <widget class="QComboBox" name="m_boardShape">
+            <property name="enabled">
+             <bool>false</bool>
+            </property>
+            <property name="toolTip">
+             <string>Lisse : silhouette d'un seul tenant. Escalier : une colonne par lamelle (suit les lamelles/vides, avec décrochés).</string>
+            </property>
+            <item>
+             <property name="text">
+              <string>Lisse</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Escalier (par lamelle)</string>
+             </property>
+            </item>
+           </widget>
+          </item>
          </layout>
         </widget>
        </item>
