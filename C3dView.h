@@ -79,11 +79,11 @@ private:
     // Contours d'une lamelle pour le rendu : dos rabote + tenons si une planche est generee.
     std::vector<Contour> jointContours(const CSlice &sl, float u0) const;
     float backPlaneU(void) const;   // plan arriere (u mini) commun a toutes les lamelles
-    // Centres (en v) de TOUS les tenons d'une tranche (un ou deux par contour exterieur qui
-    // atteint le fond) -> sert a percer les mortaises de la planche.
-    std::vector<float> sliceTabCenters(const CSlice &sl, float u0) const;
+    // Tenons d'une tranche : (centre v, demi-largeur v) pour chaque tenon (un ou deux par contour
+    // exterieur qui atteint le fond) -> sert a percer les mortaises a la MEME taille.
+    std::vector<std::pair<float, float> > sliceTabCenters(const CSlice &sl, float u0) const;
     // Intervalles v couverts par la tranche (contours exterieurs seulement, creux non combles).
-    std::vector<std::pair<float, float> > boardVSpans(const CSlice &sl) const;
+    std::vector<std::pair<float, float> > boardVSpans(const CSlice &sl, float u0) const;
     // Contours d'une tranche apres filtrage des petits ilots (m_minIslandArea).
     std::vector<Contour> visibleContours(const CSlice &sl) const;
     void drawAxisIndicator(void);

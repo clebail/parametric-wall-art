@@ -36,8 +36,8 @@ PARAMS = {
     "segments":    80,      # nb de points par section
 
     "size":        140.0,   # demi-hauteur max (Z)
-    "depth_ratio": 0.66,    # demi-profondeur / demi-hauteur (epaisseur du relief)
-    "belly":       34.0,    # debord : pousse la section vers l'avant aux lobes
+    "depth_ratio": 0.80,    # demi-profondeur / demi-hauteur (epaisseur du relief)
+    "belly":       55.0,    # debord : pousse la section vers l'avant aux lobes
                             #          -> partie la plus large devant le plan (surplomb)
     "superell":    2.1,     # exposant superellipse (2=ellipse)
 
@@ -60,7 +60,6 @@ PARAMS = {
     "drop_w":      0.085,   # largeur de la goutte (t)
     "waist_rise":  34.0,    # remontee de la colonne a la taille (mm)
     "tilt":        18.0,    # inclinaison generale haut/bas (mm)
-    "curve_y":     14.0,    # gauchissement en profondeur (mm)
 }
 
 

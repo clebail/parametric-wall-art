@@ -580,13 +580,61 @@ partagé aperçu (`C3dView`) + export (`CCutPlan`) :
   organique, tubes/nervures comme la photo) et reviendra ensuite. `bulge_stl.py` reste le fallback
   procédural. → reprendre quand il aura son STL Blender.
 
+### Planche de fond — empreinte au fond + tenons proportionnels (fait, 2026-06-18)
+Deux corrections côté accroche/silhouette de la planche, **partagées aperçu (`C3dView`) + export
+(`CCutPlan`)** via `geometry.h` :
+- **Empreinte au fond (pas le surplomb)** : sur un modèle à débord (`belly` de la tornade), la
+  planche suivait la **silhouette complète** des lamelles (la plus large = le ventre qui bombe vers
+  l'avant) au lieu du **dos plat**. Nouveau `geometry.h::backFootprintVSpan()` : l'étendue v d'un
+  contour est limitée à la **bande arrière** `[u0, u0+tol]` (sommets dans la bande + intersections
+  des arêtes avec `u=u0+tol` = le chord exact). Branché dans `C3dView::boardVSpans` (prend `u0`) et
+  la boucle de spans de `CCutPlan::build`. Vérifié tornade : hauteur fond 290.4 mm < 301.8 mm de la
+  silhouette (le surplomb tornade est surtout en profondeur Z, donc −4 % global, mais par colonne la
+  planche colle au dos).
+- **Tenons PROPORTIONNELS (largeur ~1/3 de la hauteur de contact)** : avant `kTabWidth=10` mm fixe
+  → ridicule sur une grande lamelle. Désormais demi-largeur = `(kTabFrac·H)/2` bornée à
+  `[kTabMinW=10, kTabMaxW=60]` mm. **Garde-fou** : au-delà de `kTwoTabMin=120` mm de contact →
+  **2 tenons** écartés (anti-gauchissement), retombe à 1 s'ils se chevauchent. `tabCenters()`
+  renvoie maintenant centre **+ demi-largeur** par tenon ; `integrateContourBack()` renvoie
+  `vector<pair(centre, demi-largeur)>` et prend `mmToUnit` (= `1/scale` à l'aperçu, `1` à l'export)
+  pour convertir les constantes mm. Les **mortaises** sont percées à la **même** demi-largeur que
+  leur tenon (propagée des deux côtés). `kTabWidth` conservé = `kTabMinW` (plancher, compat).
+  Vérifié tornade (60 tranches) : 63 tenons de **15.9 → 60.0 mm** (plafond atteint), 3 contours à
+  2 tenons. Cube inchangé (H=20 → plancher 10 mm, 1 tenon) → non-régression `test_cutplan` verte.
+- **Plan SVG/DXF « étiré en X » = échelle NON uniforme (corrigé)** : l'utilisateur veut
+  lamelles + vides en **matière réelle** (ex. 5 mm chacun) ; l'objet **s'allonge en X** pour que
+  tout rentre, et **Y/Z s'allongent du même ratio** (proportions conservées, juste plus grand).
+  - Bug : `currentScale = t·n / taille_axe` n'incluait **pas le vide** → Y/Z étaient mis à l'échelle
+    sur `t·n` alors que l'axe de coupe (planche, mortaises) couvrait `n·t+(n-1)·g` → **déformation**
+    (X étiré vs Y/Z). (Une 1ʳᵉ tentative — « pitch=t, mortaise=t·t/(t+g) » — corrigeait la
+    déformation mais réduisait la **matière** à 2,6 mm au lieu de 5 → mauvais sens, **annulée**.)
+  - Fix : **échelle uniforme incluant le vide** — `CMainWindow::currentScale = (n·t+(n-1)·g)/taille_axe`,
+    appliquée aux **3 axes**. `CCutPlan` revenu au pas réel `pitch = t+gap`, mortaise = **`t`**
+    (matière). « Taille finale » = `taille_modèle × s` sur les 3 axes (= longueur assemblée sur
+    l'axe). Label info → « Lamelle : t mm (matière) ».
+  - Vérifié (`/tmp/test_uniform.cpp`, tornade, t=5/n=40) : ratio planche **X:Y ~2,62 constant** =
+    ratio modèle (820:314=2,61) quel que soit le vide (0→12 mm) ; la planche grandit uniformément
+    (197→668 mm), mortaises = 5 mm. Preview (proportions modèle) + SVG + DXF cohérents. `test_cutplan`
+    et `test_board_footprint` verts.
+
+### Mortaises du fond en bleu pointillé (SVG + DXF) (fait, 2026-06-18)
+- `CCutPlan::Piece` : champ **`mortiseStart`** (index du 1er contour mortaise dans `contours`, −1 si
+  aucune). Posé dans `build()` après les lobes+creux, avant la boucle des mortaises.
+- **SVG** : les contours `>= mortiseStart` sortent en `stroke="#00a"` (bleu) + `stroke-dasharray="1.5,1"`
+  (pointillés) au lieu de noir continu. Le reste (silhouette fond + lamelles) inchangé.
+- **DXF** : nouvelle table `LTYPE` (`CONTINUOUS` + `DASHED` 2 mm/1 mm) + calque **`MORTAISE`**
+  (couleur 5 = bleu, linetype `DASHED`). Les polylignes mortaises passent sur ce calque (héritent
+  bleu+pointillé via BYLAYER) ; coupe sur `CUT`, étiquettes sur `LABEL`.
+- Vérifié visuellement (rendu Inkscape du SVG) : fond = contour noir continu + mortaises bleu tireté.
+
 ### À améliorer plus tard (TODO)
 - **Position du socle** : actuellement figée au plan arrière (u mini global). Beaucoup de lamelles
   d'un modèle organique (ex. bec/anse de la théière) seront « flottantes » → revoir : socle
   positionnable, ou tenons de longueur variable, ou plusieurs socles.
 - Choix du **côté du socle** (Dessous / Arrière) exposé dans l'UI (pour l'instant codé « arrière »).
-- Affiner la **détection de contact** / tolérance, et le seuil **1 vs 2 tenons**.
-- `attachTenon()` : gère le cas générique (1 entrée / 1 sortie de bande). Cas tordus (rentrées
+- ~~Affiner la **détection de contact** / tolérance, et le seuil **1 vs 2 tenons**.~~ → seuil 1 vs 2
+  tenons revu (proportionnel, `kTwoTabMin=120`). Reste à affiner la **tolérance de contact** (`tol`).
+- `attachTab()` : gère le cas générique (1 entrée / 1 sortie de bande). Cas tordus (rentrées
   multiples, contour très concave au dos) → tenon ignoré (lamelle comptée flottante). À durcir.
 - Vérif visuelle réelle de la feature socle (display) : position, nombre de tenons, mortaises
   alignées avec les tenons à l'assemblage.
@@ -597,9 +645,14 @@ partagé aperçu (`C3dView`) + export (`CCutPlan`) :
 
 ## Modèle 3D « tornade » paramétrique sous Blender — `tests/gen_tornade3d.py` (EN COURS)
 
-> **REPRISE 2026-06-18** : point exact d'arrêt du 2026-06-17. Le générateur marche, l'aperçu
-> ressemble bien à la réf ; **la dernière modif (épaisseur + débord) est éditée mais PAS encore
-> re-rendue/vérifiée** → 1re action demain : relancer le rendu (voir §Reprise — commandes).
+> **REPRISE 2026-06-18 (RÉSOLU)** : épaisseur **arbitrée**. Comparé à la réf vidéo (frames
+> `ffmpeg` `f_03`/`f_05` = relief profond, charnu) + rendu de 2 variantes lamelles : A=`0.66/34`
+> (121 mm, +50 %) vs B=`0.58/22` (105 mm, +31 %). Les aperçus de FACE sont quasi identiques (la
+> profondeur ne se lit pas sous l'angle 3/4 frontal du `--preview`) → décision sur chiffres+réf.
+> **L'utilisateur a choisi A (`depth_ratio 0.66` + `belly 34.0`, 820×303×121 mm)** — déjà les
+> valeurs en place, donc aucun changement de forme. **Épaisseur figée.**
+> - Nettoyage fait : `PARAMS["curve_y"]` (inutilisé) **retiré**.
+> - `tests/tornade3d.stl` **régénéré** (820×303×121, 1.2M) après suppression de `curve_y` — OK.
 
 ### But
 Créer un **vrai modèle 3D paramétrique** de la sculpture murale « tornade » (et non plus une
@@ -658,13 +711,22 @@ est la plus parlante : dos plat au mur, bombé qui déborde, planches qui s'éva
 - Le solide brut seul paraît fade : **normal**, l'effet vient du tranchage → toujours juger via
   `--lamellae` (ou en tranchant le STL dans l'appli).
 
-### DERNIÈRE MODIF (éditée, NON re-rendue) — à vérifier en 1er demain
-Retour utilisateur : « le tout un poil **plus épais** » + « par endroits les **lobes un poil plus
-larges que le plan** » (surplomb). Appliqué dans `PARAMS` :
-- `depth_ratio` 0.52 → **0.66** (plus épais).
-- ajout de **`belly: 34.0`** (débord/surplomb aux lobes ; via `cd` dans `compute_profile` +
-  `section_ring`).
-→ **PAS encore re-rendu.** Vérifier épaisseur + débord, ajuster `depth_ratio` / `belly`.
+### Épaisseur finale + décision « sculptage à la main » (2026-06-18)
+- **Épaisseur poussée 2 fois** à la demande : `depth_ratio` 0.66 → **0.80**, `belly` 34 → **55**.
+  Dims finales **820 × 314 × 151 mm** (profondeur Z 121 → 151 mm). Solide livrable régénéré.
+  Pour juger le surplomb : vue **de profil** (le `--preview` frontal ne le montre pas) — script
+  jetable `/tmp/sideview.py` (caméra +X rasante, `clip_end` relevé) sur le STL lamellé.
+- **Expérience d'asymétrie haut/bas ABANDONNÉE puis RETIRÉE du code** : tenté `top_gain`/`bot_gain`
+  + 2e goutte + `hz_top`/`hz_bot` séparés (dessus lisse / dessous qui pend) pour coller à la réf →
+  rendait la forme « moustache/manta » symétrique et trop haute, sans capturer l'**aile gauche
+  effilée** ni la **virgule asymétrique** de la vidéo. Tous ces ajouts ont été **annulés**
+  (générateur revenu à l'état lobes symétriques, `swirl 2.4`). `grep hz_top|bot_gain|drop2` = 0.
+- **DÉCISION UTILISATEUR (actée)** : le générateur paramétrique est un **bon brouillon de forme**
+  mais ne clonera pas la sculpture organique (aile/virgule/vortex) sans refonte lourde à rendement
+  décroissant. → **L'utilisateur sculptera la forme fidèle à la MAIN sous Blender** ; côté Claude on
+  **tranche son STL** et on gère tout le pipeline découpe/planche (qui marche sur n'importe quel STL).
+  `gen_tornade3d.py` reste comme fallback procédural.
+- **EN ATTENTE** : le STL Blender de l'utilisateur, à importer/trancher (axe X) dans l'appli.
 
 ### Reprise — commandes
 ```bash
@@ -676,9 +738,12 @@ blender --background --python tests/gen_tornade3d.py -- tests/tornade3d.stl --pr
 ```
 
 ### TODO tornade3d
-- Vérifier la modif épaisseur+débord ci-dessus ; régler `depth_ratio`/`belly`.
-- Pousser la ressemblance fine : volute haut-gauche, asymétrie des lobes, forme de la goutte.
-- **Trancher `tornade3d.stl` dans l'appli** (axe X) et valider le plan de découpe réel.
-- Nettoyage : `PARAMS["curve_y"]` n'est **plus utilisé** (profondeur gérée par `belly`) → à retirer.
-- Optionnel : peaufiner le cadrage caméra du `--preview`.
+- ~~Vérifier la modif épaisseur+débord ; régler `depth_ratio`/`belly`.~~ → **FAIT, 0.80/55 figé.**
+- ~~Nettoyage : `PARAMS["curve_y"]` plus utilisé → à retirer.~~ → **FAIT.**
+- ~~Pousser la ressemblance fine (asymétrie aile/virgule).~~ → **ABANDONNÉ** : sculptage Blender à la
+  main par l'utilisateur (cf. décision ci-dessus). Le paramétrique reste un brouillon.
+- **EN ATTENTE du STL Blender utilisateur** → l'importer/trancher (axe X) dans l'appli, valider le
+  plan de découpe réel (besoin display).
+- Optionnel : peaufiner le cadrage caméra du `--preview` (ajouter une vue de profil ? cf.
+  `/tmp/sideview.py`).
 - `tests/gen_tornade3d.py` et `tests/tornade3d.stl` ne sont **pas commités** (untracked).

@@ -518,44 +518,44 @@ float C3dView::backPlaneU(void) const {
 //-----------------------------------------------------------------------------------------------
 // Centres (en v) des tenons d'une tranche : 0 si flottante (dos hors contact) ou sans bande de
 // contact exploitable. Mutualise par le rendu des lamelles et celui des mortaises de la planche.
-std::vector<float> C3dView::sliceTabCenters(const CSlice &sl, float u0) const {
-    std::vector<float> all;
+std::vector<std::pair<float, float> > C3dView::sliceTabCenters(const CSlice &sl, float u0) const {
+    std::vector<std::pair<float, float> > all;
     std::vector<Contour> cs = visibleContours(sl);
     if (cs.empty()) return all;
     const float scale = m_boardScale > 0 ? m_boardScale : 1.0f;
     const float t     = m_sliceThickness;   // dos rabote de l'epaisseur (vue) d'une lamelle
     const float tol   = t;
-    const float halfW = (BoardJoint::kTabWidth / scale) * 0.5f;
 
-    // Chaque contour EXTERIEUR (corps, anse, bec...) qui touche le fond recoit ses tenons.
+    // Chaque contour EXTERIEUR (corps, anse, bec...) qui touche le fond recoit ses tenons
+    // proportionnels (mm -> unites modele via mmToUnit = 1/scale).
     std::vector<char> outer = outerContourMask(cs);
     for (size_t c = 0; c < cs.size(); c++) {
         if (!outer[c]) continue;
-        const std::vector<float> placed = BoardJoint::integrateContourBack(cs[c], u0, t, tol, halfW);
+        const std::vector<std::pair<float, float> > placed =
+            BoardJoint::integrateContourBack(cs[c], u0, t, tol, 1.0f / scale);
         all.insert(all.end(), placed.begin(), placed.end());
     }
     return all;
 }
 //-----------------------------------------------------------------------------------------------
-// Intervalles v reellement couverts par une tranche : un par contour EXTERIEUR (meme orientation
-// que le plus grand contour), fusionnes. Les trous (orientation opposee) ne reduisent pas la
-// couverture ; les parties disjointes ne sont PAS comblees -> la planche epouse les creux.
-std::vector<std::pair<float, float> > C3dView::boardVSpans(const CSlice &sl) const {
+// Intervalles v reellement couverts par une tranche AU FOND : un par contour EXTERIEUR, limites a
+// la bande arriere [u0, u0+tol] (empreinte de contact) -> la planche suit le dos plat et non le
+// surplomb. Les trous ne reduisent pas la couverture ; les parties disjointes ne sont PAS comblees.
+std::vector<std::pair<float, float> > C3dView::boardVSpans(const CSlice &sl, float u0) const {
     std::vector<std::pair<float, float> > spans;
     const std::vector<Contour> cs = visibleContours(sl);
     if (cs.empty()) return spans;
+
+    const float tol = m_sliceThickness;   // meme tolerance de contact que le rabot/tenons
 
     // Un intervalle v par contour EXTERIEUR (containment, pas le signe d'aire) -> n'oublie aucun
     // morceau disjoint (anse, bec) et ne comble pas les trous.
     const std::vector<char> outer = outerContourMask(cs);
     for (size_t c = 0; c < cs.size(); c++) {
-        if (!outer[c] || cs[c].size() < 3) continue;
-        float vmin = 1e30f, vmax = -1e30f;
-        for (size_t k = 0; k < cs[c].size(); k++) {
-            vmin = std::min(vmin, cs[c][k].y);
-            vmax = std::max(vmax, cs[c][k].y);
-        }
-        if (vmax > vmin) spans.push_back(std::make_pair(vmin, vmax));
+        if (!outer[c]) continue;
+        float vmin, vmax;
+        if (backFootprintVSpan(cs[c], u0, tol, vmin, vmax))
+            spans.push_back(std::make_pair(vmin, vmax));
     }
 
     std::sort(spans.begin(), spans.end());
@@ -578,13 +578,13 @@ std::vector<Contour> C3dView::jointContours(const CSlice &sl, float u0) const {
     const float scale = m_boardScale > 0 ? m_boardScale : 1.0f;
     const float t     = m_sliceThickness;   // dos rabote de l'epaisseur (vue) d'une lamelle
     const float tol   = t;
-    const float halfW = (BoardJoint::kTabWidth / scale) * 0.5f;
 
-    // Chaque contour exterieur (corps, anse, bec...) atteignant le fond est rabote + tenonne.
+    // Chaque contour exterieur (corps, anse, bec...) atteignant le fond est rabote + tenonne
+    // (tenons proportionnels ; mm -> unites modele via mmToUnit = 1/scale).
     const std::vector<char> outer = outerContourMask(out);
     for (size_t c = 0; c < out.size(); c++)
         if (outer[c])
-            BoardJoint::integrateContourBack(out[c], u0, t, tol, halfW);
+            BoardJoint::integrateContourBack(out[c], u0, t, tol, 1.0f / scale);
     return out;
 }
 //-----------------------------------------------------------------------------------------------
@@ -603,9 +603,7 @@ void C3dView::drawBoard(void) {
     const float pitch = m_sliceThickness + m_sliceGap;
     const float halfT = m_sliceThickness * 0.5f;
 
-    const float scale  = m_boardScale > 0 ? m_boardScale : 1.0f;
     const float tModel = m_sliceThickness;   // meme epaisseur (vue) qu'une lamelle, cf. ci-dessous
-    const float halfW  = (BoardJoint::kTabWidth / scale) * 0.5f;
 
     const float u0 = backPlaneU();
     if (u0 > 1e29f)
@@ -634,17 +632,18 @@ void C3dView::drawBoard(void) {
     for (size_t s = 0; s < m_slices.size(); s++) {
         const CSlice &sl = m_slices[s];
         if (sl.contours.empty()) continue;
-        const std::vector<std::pair<float, float> > spans = boardVSpans(sl);
+        const std::vector<std::pair<float, float> > spans = boardVSpans(sl, u0);
         if (spans.empty()) continue;
         const float center = lo + (sl.index + 0.5f) * pitch;
         spansBySlice.push_back(std::make_pair(center, spans));
-        const std::vector<float> centers = sliceTabCenters(sl, u0);
+        const std::vector<std::pair<float, float> > centers = sliceTabCenters(sl, u0);
         for (size_t ci = 0; ci < centers.size(); ci++) {
+            const float cv = centers[ci].first, hw = centers[ci].second;  // meme taille que le tenon
             Contour h;
-            h.push_back(SPoint2(center - halfT, centers[ci] - halfW));
-            h.push_back(SPoint2(center + halfT, centers[ci] - halfW));
-            h.push_back(SPoint2(center + halfT, centers[ci] + halfW));
-            h.push_back(SPoint2(center - halfT, centers[ci] + halfW));
+            h.push_back(SPoint2(center - halfT, cv - hw));
+            h.push_back(SPoint2(center + halfT, cv - hw));
+            h.push_back(SPoint2(center + halfT, cv + hw));
+            h.push_back(SPoint2(center - halfT, cv + hw));
             holes.push_back(h);
         }
     }

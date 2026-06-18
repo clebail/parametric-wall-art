@@ -44,6 +44,7 @@ public:
         float tx, ty;                   // position sur la feuille en mm
         int sheet;                      // index de feuille (0-based)
         std::vector<Mark> marks;        // etiquettes internes (n° de lamelle sur le fond)
+        int mortiseStart = -1;          // index du 1er contour MORTAISE (planche) ; -1 = aucune
     };
 
     CCutPlan(void) : m_sheetCount(0) {}

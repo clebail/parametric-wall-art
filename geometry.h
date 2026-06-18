@@ -62,6 +62,31 @@ inline std::vector<char> outerContourMask(const std::vector<Contour> &cs) {
     return outer;
 }
 //-----------------------------------------------------------------------------------------------
+// Empreinte au FOND d'un contour de lamelle : extension v limitee a la bande arriere
+// [u0, u0+band] (zone de contact avec la planche), au lieu de tout le contour. Sur un modele a
+// surplomb (ventre qui bombe vers l'avant), la silhouette complete est plus large que le dos plat :
+// la planche doit suivre l'empreinte au fond, pas le debord. Retourne false si le contour ne touche
+// pas la bande. On prend les sommets dans la bande + les intersections des aretes avec u=u0+band
+// (le "chord" exact a la face avant de la planche).
+inline bool backFootprintVSpan(const Contour &c, float u0, float band,
+                               float &vmin, float &vmax) {
+    if (c.size() < 3) return false;
+    const float uMax = u0 + band;
+    vmin = 1e30f; vmax = -1e30f;
+    const size_t n = c.size();
+    for (size_t k = 0; k < n; k++) {
+        const SPoint2 &a = c[k];
+        if (a.x <= uMax) { vmin = std::min(vmin, a.y); vmax = std::max(vmax, a.y); }
+        const SPoint2 &b = c[(k + 1) % n];
+        if ((a.x <= uMax) != (b.x <= uMax) && b.x != a.x) {   // arete traversant le plan u=uMax
+            const float f  = (uMax - a.x) / (b.x - a.x);
+            const float vy = a.y + f * (b.y - a.y);
+            vmin = std::min(vmin, vy); vmax = std::max(vmax, vy);
+        }
+    }
+    return vmax > vmin;
+}
+//-----------------------------------------------------------------------------------------------
 // Supprime les contours dont |aire| < minArea (petits ilots / trous parasites), en conservant
 // TOUJOURS le plus grand (le corps de la tranche). minArea dans l'unite des contours (au carre).
 inline void filterSmallIslands(std::vector<Contour> &contours, float minArea) {
@@ -211,9 +236,15 @@ inline void boardEnvelopeAndGaps(
 // lamelle est recule de l'epaisseur planche (clip a u >= uClip), sauf des tenons qui ressortent
 // jusqu'au plan arriere (uTip) pour s'enficher dans les mortaises de la planche.
 namespace BoardJoint {
-const float kTabWidth  = 10.0f;   // largeur d'un tenon/mortaise (mm), constante
-const float kTwoTabMin = 40.0f;   // hauteur de contact au-dela de laquelle on met 2 tenons
+// Tenons PROPORTIONNELS : largeur ~1/3 de la hauteur de contact de la lamelle (accroche
+// d'autant plus large que la lamelle est grande), bornee entre kTabMinW et kTabMaxW. Au-dela de
+// kTwoTabMin de contact -> 2 tenons ecartes (garde-fou anti-gauchissement des grandes lamelles).
+const float kTabFrac   = 1.0f / 3.0f; // largeur tenon = kTabFrac * hauteur de contact
+const float kTabMinW   = 10.0f;   // largeur mini d'un tenon/mortaise (mm) : reste usinable
+const float kTabMaxW   = 60.0f;   // largeur maxi d'un tenon/mortaise (mm) : garde des epaules
+const float kTwoTabMin = 120.0f;  // hauteur de contact au-dela de laquelle on met 2 tenons (mm)
 const float kTabPad    = 4.0f;    // retrait des tenons par rapport aux bords du contact (mm)
+const float kTabWidth  = kTabMinW; // compat : largeur de reference (= plancher) pour les appelants
 
 inline bool inVBand(float v, float vL, float vR) { return v >= vL && v <= vR; }
 
@@ -304,36 +335,51 @@ inline bool attachTab(Contour &c, float uTip, float vc, float halfW) {
     return true;
 }
 
-// Centres des tenons selon l'etendue de contact en v (1 ou 2 selon kTwoTabMin). Retourne le
-// nombre de tenons et remplit out[].
-inline int tabCenters(float cvmin, float cvmax, float halfW, float out[2]) {
-    if (cvmax < cvmin) return 0;
-    if (cvmax - cvmin >= kTwoTabMin) {
-        out[0] = cvmin + kTabPad + halfW;
-        out[1] = cvmax - kTabPad - halfW;
-        return 2;
+// Place 1 ou 2 tenons PROPORTIONNELS selon l'etendue de contact en v. La demi-largeur vaut
+// (kTabFrac * hauteur)/2, bornee a [minHalfW, maxHalfW]. Au-dela de twoTabMin -> 2 tenons ecartes
+// (retombe a 1 s'ils se chevauchent). Remplit center[]/halfW[] et retourne le nombre de tenons.
+// Toutes les longueurs sont exprimees dans l'unite du contour (mm a l'export, modele a l'apercu).
+inline int tabCenters(float cvmin, float cvmax, float minHalfW, float maxHalfW, float pad,
+                      float twoTabMin, float center[2], float halfW[2]) {
+    const float H = cvmax - cvmin;
+    if (H <= 0.0f) return 0;
+    float hw = H * (kTabFrac * 0.5f);
+    if (hw < minHalfW) hw = minHalfW;
+    if (hw > maxHalfW) hw = maxHalfW;
+    if (H >= twoTabMin) {
+        center[0] = cvmin + pad + hw; halfW[0] = hw;
+        center[1] = cvmax - pad - hw; halfW[1] = hw;
+        if (center[1] - center[0] > 2.0f * hw) return 2;   // ne se chevauchent pas -> 2 tenons
     }
-    out[0] = 0.5f * (cvmin + cvmax);
+    center[0] = 0.5f * (cvmin + cvmax); halfW[0] = hw;
     return 1;
 }
 
 // Integre la planche dans le dos d'UN contour exterieur : si le contour atteint le plan arriere
-// u0 (a tol pres), rabote son dos a u0+t et greffe 1-2 tenons jusqu'a u0. Modifie c et renvoie les
-// centres v des tenons reellement poses (pour creer les mortaises). Renvoie vide (c inchange) si
-// le contour ne touche pas le fond ou si aucun tenon ne s'accroche.
-inline std::vector<float> integrateContourBack(Contour &c, float u0, float t, float tol, float halfW) {
-    std::vector<float> placed;
+// u0 (a tol pres), rabote son dos a u0+t et greffe 1-2 tenons PROPORTIONNELS jusqu'a u0. Modifie c
+// et renvoie pour chaque tenon pose (centre v, demi-largeur v) -> sert a percer les mortaises a la
+// MEME taille. Renvoie vide (c inchange) si le contour ne touche pas le fond ou si aucun tenon ne
+// s'accroche. mmToUnit convertit les constantes mm vers l'unite du contour (1/scale a l'apercu, 1
+// a l'export ou tout est deja en mm).
+inline std::vector<std::pair<float, float> > integrateContourBack(
+        Contour &c, float u0, float t, float tol, float mmToUnit) {
+    std::vector<std::pair<float, float> > placed;
     if (c.size() < 3) return placed;
     float cvmin = 1e30f, cvmax = -1e30f;
     for (size_t k = 0; k < c.size(); k++)
         if (c[k].x <= u0 + tol) { cvmin = std::min(cvmin, c[k].y); cvmax = std::max(cvmax, c[k].y); }
     if (cvmax < cvmin) return placed;     // ne touche pas le fond
-    float centers[2];
-    const int nc = tabCenters(cvmin, cvmax, halfW, centers);
+    const float minHalfW = kTabMinW   * mmToUnit * 0.5f;
+    const float maxHalfW = kTabMaxW   * mmToUnit * 0.5f;
+    const float pad      = kTabPad    * mmToUnit;
+    const float twoMin   = kTwoTabMin * mmToUnit;
+    float centers[2], halfWs[2];
+    const int nc = tabCenters(cvmin, cvmax, minHalfW, maxHalfW, pad, twoMin, centers, halfWs);
     Contour work = clipKeepUGE(c, u0 + t);
     for (int i = 0; i < nc; i++) {
         insertBackVertex(work, u0 + t, centers[i]);
-        if (attachTab(work, u0, centers[i], halfW)) placed.push_back(centers[i]);
+        if (attachTab(work, u0, centers[i], halfWs[i]))
+            placed.push_back(std::make_pair(centers[i], halfWs[i]));
     }
     if (!placed.empty()) c.swap(work);
     return placed;

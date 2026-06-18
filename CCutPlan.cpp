@@ -69,9 +69,13 @@ bool CCutPlan::build(const std::vector<CSlice> &slices, const Params &params) {
         const float t    = params.sliceThickness > 0 ? params.sliceThickness : 10.0f;
         const float gap  = params.gapThickness;
         const float tol  = std::max(t, 1.0f);     // tolerance de contact avec le plan du fond
-        const float halfW = BoardJoint::kTabWidth * 0.5f;
+        // Pas reel d'assemblage = lamelle + vide. L'echelle (params.scale) inclut deja le vide
+        // (cf. CMainWindow::currentScale) et s'applique uniformement a Y/Z -> proportions conservees,
+        // la planche fait n*(t+gap) en X sans deformation (juste plus grande). Mortaise = t (matiere).
+        const float pitch = t + gap;
 
-        std::vector<std::pair<float, float> > mortises;   // (x centre sur le socle, y centre global)
+        struct Mortise { float x, y, hw; };               // centre axe, centre v, demi-largeur v
+        std::vector<Mortise> mortises;
         std::vector<Mark> marks;                           // numero de lamelle sur le fond
 
         for (size_t i = 0; i < raws.size(); i++) {
@@ -81,18 +85,20 @@ bool CCutPlan::build(const std::vector<CSlice> &slices, const Params &params) {
             if (r.minx > gMinX + tol) { m_floating.push_back(r.index); continue; }
 
             // Chaque contour EXTERIEUR (corps, anse, bec...) atteignant le fond est rabote de t et
-            // recoit ses tenons ; chaque tenon donne une mortaise sur le socle (meme position axe).
-            const float xPosBoard = r.index * (t + gap) + t * 0.5f;
+            // recoit ses tenons proportionnels ; chaque tenon donne une mortaise (meme taille) sur
+            // le socle (meme position axe). Export en mm -> mmToUnit = 1.
+            const float xPosBoard = (r.index + 0.5f) * pitch;
             const std::vector<char> outer = outerContourMask(r.contours);
             int placed = 0;
             float firstV = 0.0f; bool haveV = false;
             for (size_t c = 0; c < r.contours.size(); c++) {
                 if (!outer[c]) continue;
-                const std::vector<float> got =
-                    BoardJoint::integrateContourBack(r.contours[c], gMinX, t, tol, halfW);
+                const std::vector<std::pair<float, float> > got =
+                    BoardJoint::integrateContourBack(r.contours[c], gMinX, t, tol, 1.0f);
                 for (size_t m = 0; m < got.size(); m++) {
-                    mortises.push_back(std::make_pair(xPosBoard, got[m]));
-                    if (!haveV) { firstV = got[m]; haveV = true; }
+                    Mortise mo; mo.x = xPosBoard; mo.y = got[m].first; mo.hw = got[m].second;
+                    mortises.push_back(mo);
+                    if (!haveV) { firstV = got[m].first; haveV = true; }
                 }
                 placed += int(got.size());
             }
@@ -116,16 +122,15 @@ bool CCutPlan::build(const std::vector<CSlice> &slices, const Params &params) {
                 const std::vector<char> outer = outerContourMask(r->contours);
                 std::vector<std::pair<float, float> > spans;
                 for (size_t c = 0; c < r->contours.size(); c++) {
-                    if (!outer[c] || r->contours[c].size() < 3) continue;
-                    float vmin = big, vmax = -big;
-                    for (size_t k = 0; k < r->contours[c].size(); k++) {
-                        vmin = std::min(vmin, r->contours[c][k].y);
-                        vmax = std::max(vmax, r->contours[c][k].y);
-                    }
-                    if (vmax > vmin) spans.push_back(std::make_pair(vmin, vmax));
+                    if (!outer[c]) continue;
+                    // Empreinte AU FOND (bande arriere [gMinX, gMinX+tol]) et non la silhouette
+                    // debordante : la planche suit le dos plat, pas le surplomb (ventre).
+                    float vmin, vmax;
+                    if (backFootprintVSpan(r->contours[c], gMinX, tol, vmin, vmax))
+                        spans.push_back(std::make_pair(vmin, vmax));
                 }
                 if (!spans.empty())
-                    spansBySlice.push_back(std::make_pair(r->index * (t + gap) + t * 0.5f, spans));
+                    spansBySlice.push_back(std::make_pair((r->index + 0.5f) * pitch, spans));
             }
 
             // Fond connexe (enveloppe + trous de creux). Lisse = liaisons en diagonale ; escalier =
@@ -133,9 +138,9 @@ bool CCutPlan::build(const std::vector<CSlice> &slices, const Params &params) {
             std::vector<std::pair<float, std::vector<std::pair<float, float> > > > env, gaps;
             boardEnvelopeAndGaps(spansBySlice, env, gaps);
             const float treadHW = params.boardSmooth ? 0.0f : t * 0.5f;
-            const float maxStep = (t + gap) * 1.5f;   // au-dela = tranche sautee -> on ne ponte pas
-            std::vector<Contour> lobes    = buildSmoothLobes(env,  (t + gap) * 0.5f, treadHW, maxStep, false);
-            std::vector<Contour> gapHoles = buildSmoothLobes(gaps, (t + gap) * 0.5f, treadHW, maxStep, true);
+            const float maxStep = pitch * 1.5f;       // au-dela = tranche sautee -> on ne ponte pas
+            std::vector<Contour> lobes    = buildSmoothLobes(env,  pitch * 0.5f, treadHW, maxStep, false);
+            std::vector<Contour> gapHoles = buildSmoothLobes(gaps, pitch * 0.5f, treadHW, maxStep, true);
 
           if (!lobes.empty()) {
             board.sliceIndex = -1;
@@ -144,15 +149,17 @@ bool CCutPlan::build(const std::vector<CSlice> &slices, const Params &params) {
             for (size_t i = 0; i < lobes.size(); i++)    board.contours.push_back(lobes[i]);
             for (size_t i = 0; i < gapHoles.size(); i++) board.contours.push_back(gapHoles[i]);
 
-            const float halfT = t * 0.5f;
+            board.mortiseStart = int(board.contours.size());   // les contours suivants = mortaises
+            const float halfT = t * 0.5f;   // largeur mortaise = epaisseur matiere de la lamelle
             for (size_t m = 0; m < mortises.size(); m++) {
-                const float xc = mortises[m].first;
-                const float yc = mortises[m].second;
+                const float xc = mortises[m].x;
+                const float yc = mortises[m].y;
+                const float hw = mortises[m].hw;       // meme demi-largeur que le tenon
                 Contour hole;
-                hole.push_back(SPoint2(xc - halfT, yc - halfW));
-                hole.push_back(SPoint2(xc + halfT, yc - halfW));
-                hole.push_back(SPoint2(xc + halfT, yc + halfW));
-                hole.push_back(SPoint2(xc - halfT, yc + halfW));
+                hole.push_back(SPoint2(xc - halfT, yc - hw));
+                hole.push_back(SPoint2(xc + halfT, yc - hw));
+                hole.push_back(SPoint2(xc + halfT, yc + hw));
+                hole.push_back(SPoint2(xc - halfT, yc + hw));
                 board.contours.push_back(hole);
             }
 
@@ -300,10 +307,15 @@ bool CCutPlan::writeSVGSheet(const QString &path, int sheet) const {
         ts << "  <g id=\"" << gid << "\">\n";
 
         for (size_t c = 0; c < p.contours.size(); c++) {
+            const bool mortaise = (p.mortiseStart >= 0 && int(c) >= p.mortiseStart);
             ts << "    <polygon points=\"";
             for (size_t k = 0; k < p.contours[c].size(); k++)
                 ts << (p.tx + p.contours[c][k].x) << "," << (H - (p.ty + p.contours[c][k].y)) << " ";
-            ts << "\" fill=\"none\" stroke=\"#000\" stroke-width=\"0.1\"/>\n";
+            if (mortaise)   // mortaises du fond : bleu + pointilles (pas le contour de coupe)
+                ts << "\" fill=\"none\" stroke=\"#00a\" stroke-width=\"0.1\" "
+                   << "stroke-dasharray=\"1.5,1\"/>\n";
+            else
+                ts << "\" fill=\"none\" stroke=\"#000\" stroke-width=\"0.1\"/>\n";
         }
 
         const float cx = p.tx + p.w * 0.5f;
@@ -351,13 +363,16 @@ bool CCutPlan::writeDXFSheet(const QString &path, int sheet) const {
     // Entites d'une piece (coordonnees absolues, calques CUT/LABEL).
     auto emitPiece = [&](const Piece &p) {
         for (size_t c = 0; c < p.contours.size(); c++) {
-            DXF(0, "POLYLINE"); DXF(8, "CUT"); DXF(66, 1); DXF(70, 1); // 1 = fermee
+            // Mortaises du fond sur calque MORTAISE (bleu pointille via la def de calque/LTYPE) ;
+            // le reste (contours de coupe) sur CUT.
+            const char *lay = (p.mortiseStart >= 0 && int(c) >= p.mortiseStart) ? "MORTAISE" : "CUT";
+            DXF(0, "POLYLINE"); DXF(8, lay); DXF(66, 1); DXF(70, 1); // 1 = fermee
             for (size_t k = 0; k < p.contours[c].size(); k++) {
-                DXF(0, "VERTEX"); DXF(8, "CUT");
+                DXF(0, "VERTEX"); DXF(8, lay);
                 DXF(10, (p.tx + p.contours[c][k].x));
                 DXF(20, (p.ty + p.contours[c][k].y));
             }
-            DXF(0, "SEQEND"); DXF(8, "CUT");
+            DXF(0, "SEQEND"); DXF(8, lay);
         }
         const float cx = p.tx + p.w * 0.5f;
         const float cy = p.ty + p.h * 0.5f;
@@ -384,9 +399,15 @@ bool CCutPlan::writeDXFSheet(const QString &path, int sheet) const {
     DXF(0, "ENDSEC");
 
     DXF(0, "SECTION"); DXF(2, "TABLES");
-    DXF(0, "TABLE"); DXF(2, "LAYER"); DXF(70, 2);
-    DXF(0, "LAYER"); DXF(2, "CUT");   DXF(70, 0); DXF(62, 7); DXF(6, "CONTINUOUS");
-    DXF(0, "LAYER"); DXF(2, "LABEL"); DXF(70, 0); DXF(62, 1); DXF(6, "CONTINUOUS");
+    // Types de ligne : CONTINUOUS (coupe) + DASHED (mortaises). Motif DASHED = 2 mm trait, 1 mm vide.
+    DXF(0, "TABLE"); DXF(2, "LTYPE"); DXF(70, 2);
+    DXF(0, "LTYPE"); DXF(2, "CONTINUOUS"); DXF(70, 0); DXF(3, "Solid line"); DXF(72, 65); DXF(73, 0); DXF(40, 0.0);
+    DXF(0, "LTYPE"); DXF(2, "DASHED"); DXF(70, 0); DXF(3, "Dashed __ __"); DXF(72, 65); DXF(73, 2); DXF(40, 3.0); DXF(49, 2.0); DXF(49, -1.0);
+    DXF(0, "ENDTAB");
+    DXF(0, "TABLE"); DXF(2, "LAYER"); DXF(70, 3);
+    DXF(0, "LAYER"); DXF(2, "CUT");      DXF(70, 0); DXF(62, 7); DXF(6, "CONTINUOUS");
+    DXF(0, "LAYER"); DXF(2, "LABEL");    DXF(70, 0); DXF(62, 1); DXF(6, "CONTINUOUS");
+    DXF(0, "LAYER"); DXF(2, "MORTAISE"); DXF(70, 0); DXF(62, 5); DXF(6, "DASHED");  // 5 = bleu
     DXF(0, "ENDTAB");
     DXF(0, "ENDSEC");
 

@@ -53,7 +53,14 @@ float CMainWindow::currentScale(void) const {
     if (!m_hasMesh) return 1.0f;
     const float axisSize = axisModelSize();
     if (axisSize <= 0.0f) return 1.0f;
-    return float(m_sliceThick->value()) * float(m_nbSlices->value()) / axisSize;
+    // Echelle UNIFORME : l'axe de coupe doit accueillir n lamelles + (n-1) vides (matiere reelle).
+    // On etire donc le modele en X pour que tout rentre, et du MEME ratio en Y/Z (proportions
+    // conservees). Le vide est inclus -> mm/unite = longueur_assemblee / taille_modele_sur_axe.
+    const int   n = m_nbSlices->value();
+    const float t = float(m_sliceThick->value());
+    const float g = float(m_gapThick->value());
+    const float assembled = float(n) * t + (n > 1 ? n - 1 : 0) * g;
+    return assembled / axisSize;
 }
 //-----------------------------------------------------------------------------------------------
 // Repartit le pas de tranche (constant, en unites modele) entre lamelle pleine et vide,
@@ -192,21 +199,16 @@ void CMainWindow::updateInfo(void) {
     }
     const float s   = currentScale();
     const SVec3 sz  = w3d->mesh().size();
-    const int    n  = m_nbSlices->value();
-    const float gap = float(m_gapThick->value());
-    // Le preview garde les proportions, mais l'objet physique monte au mur inclut les vides :
-    // sur l'axe de coupe, profondeur reelle = n lamelles + (n-1) vides.
-    const float assembledAxis = float(n) * float(m_sliceThick->value())
-                                + (n > 1 ? n - 1 : 0) * gap;
+    // Echelle uniforme (inclut le vide) -> les 3 dims = taille modele x s, proportions conservees.
+    // Sur l'axe de coupe ca vaut exactement n lamelles + (n-1) vides (= longueur assemblee au mur).
     float dim[3] = { sz.x * s, sz.y * s, sz.z * s };
-    dim[m_axisCombo->currentIndex()] = assembledAxis;
     m_scaleLabel->setText(tr("%1 mm/u").arg(s, 0, 'f', 3));
     m_sizeLabel->setText(tr("%1 × %2 × %3 mm")
                          .arg(dim[0], 0, 'f', 1)
                          .arg(dim[1], 0, 'f', 1)
                          .arg(dim[2], 0, 'f', 1));
-    QString info = tr("Lamelle : %1 mm\nPièces : %2 — Feuilles : %3")
-                    .arg(m_slicer.thickness() * s, 0, 'f', 2)
+    QString info = tr("Lamelle : %1 mm (matière)\nPièces : %2 — Feuilles : %3")
+                    .arg(float(m_sliceThick->value()), 0, 'f', 2)
                     .arg(m_plan.pieceCount())
                     .arg(m_plan.sheetCount());
 
