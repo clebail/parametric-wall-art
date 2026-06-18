@@ -760,3 +760,82 @@ blender --background --python tests/gen_tornade3d.py -- tests/tornade3d.stl --pr
 - Optionnel : peaufiner le cadrage caméra du `--preview` (ajouter une vue de profil ? cf.
   `/tmp/sideview.py`).
 - `tests/gen_tornade3d.py` et `tests/tornade3d.stl` ne sont **pas commités** (untracked).
+
+---
+
+## Système PHOTO → LAMELLES — `tests/views2hull.py` (EN COURS, 2026-06-18)
+
+### Idée / pourquoi
+Plutôt que sculpter un solide 3D puis le trancher, **générer directement le solide-maître à partir
+de 2 photos** de la sculpture de réf. Reformulation clé : une sculpture-lamelles = une pile de
+**sections 2D (Y,Z)** le long de X, chaque section pilotée par quelques **courbes 1D de x** :
+`top(x)`, `bot(x)` (silhouette hauteur), `depth(x)`, `belly(x)` (bombé), `twist(x)` (vortex).
+Le solide se branche ensuite sur le pipeline existant (slicer/`CCutPlan`/aperçu) qui marche sur
+n'importe quel STL.
+
+**Discussion de fond (actée)** :
+- L'extraction sur photo n'est pas un bricolage : `top(x)/bot(x)` = **min/max par colonne** d'un
+  masque de silhouette. C'est l'entrée *naturelle* du modèle.
+- Combiner deux vues malgré leurs perspectives : **ne PAS rectifier en 2D** ; aligner seulement le
+  **paramètre 1D X** (les lamelles comptables = pierre de Rosette ; ou repères pointe/taille/pointe).
+- **Photogrammétrie sur `tornade.mp4` ÉCARTÉE** : sujet quasi pire-cas (blanc mat sans texture,
+  lamelles répétitives → faux appariements, lames fines auto-occultantes, vidéo compressée). En
+  plus on reconstruirait l'objet *déjà lamellé* qu'on jette en re-tranchant. (1920×1080, 30 fps,
+  419 frames, caméra en travelling pas en orbite.)
+- **Visual hull / space carving** = le bon outil pour cette vidéo (silhouettes sur fond noir, immune
+  à la texture/répétition, donne l'enveloppe lisse à trancher). La **méthode 2 vues ortho** retenue
+  ici = un **visual hull dégénéré à 2 vues** (face + dessus), zéro calibration.
+
+### Entrées
+- `/home/julfab/Images/tornade.png` — **vue de FACE** (709×266, blanc sur mur gris clair).
+- `/home/julfab/Images/tornade2.png` — **vue de DESSUS oblique** (804×226, bois clair sur fond sombre).
+- `/home/julfab/Images/tornadeSP.png` — coupe annotée par l'utilisateur (réglages surplomb).
+- Réf forme : `tornade.png` (2 lobes + taille pincée + effilement aux 2 bouts).
+
+### Pipeline (`tests/views2hull.py`, dépend de numpy/scipy/PIL/matplotlib UNIQUEMENT —
+pas de trimesh/cv2/skimage ; writer STL binaire + Otsu maison)
+- `silhouette_face` : segmentation par **TEXTURE locale** (écart-type sur fenêtre 7px). Indispensable
+  car blanc-sur-gris = trop peu de contraste pour un seuil de luminance ; les lamelles striées ont
+  une forte variance locale, le mur lisse non. Puis closing/fill/largest-CC/opening.
+- `silhouette_top` : seuil **luminance** (Otsu) — bois clair sur fond sombre, trivial.
+- `extract_topbot` : `top(x)/bot(x)` = min/max par colonne du masque de face.
+- `depth_from_top(beta=0.45, depth_max=170)` : l'épaisseur apparente oblique ≈ `a·hauteur + b·depth` ;
+  la hauteur étant connue (face), on la **soustrait** (`Ln - beta·Hn`) pour **isoler `depth(x)`**,
+  recalé sur la plage X normalisée (`resample_norm`). L'oblique non calibré ne donne que la **forme**
+  → amplitude `depth_max` = **choix de design** (mm). Résultat : profil 2 lobes, pincé à la taille,
+  effilé aux bouts.
+- `build_sections(length, n, swirl=0.9)` : section (Y,Z) fermée, **DOS PLAT z=0** ; échelle uniforme
+  (X et Y) `px2mm = length/(x1-x0)`. Front = **demi-ellipse** `D·√(1−((y−yc)/hy)²)` avec `D=depth(x)`,
+  sommet `yc` **migré** par `swirl·tanh((i−waist)/sw)` → effet **vortex SANS rotation rigide**
+  (la rotation rigide soulevait le dos — corrigé). Loft + capots → `write_stl` (STL binaire).
+- `render_lamellae` : aperçu 3/4 matplotlib (Poly3DCollection).
+- Conventions repère = projet : **X = axe de coupe (longueur)**, **Y = hauteur**, **Z = profondeur
+  hors mur**, **dos plat à Z=0**.
+
+### État / acquis
+- Chaîne **2 photos → silhouette (face) + profondeur (dessus) → solide dos-plat → STL** fonctionnelle.
+- **Dos plat** vérifié z=0 exact. Vortex par migration du sommet (pas de rotation).
+- Dernier STL : **52 lamelles, épaisseur 15 mm, vide 15 mm** → longueur assemblée X = 1545 mm,
+  dims **1545 × 468 × 170 mm**, échelle 2,23 mm/px → `/tmp/tornade_hull.stl` (5824 tris).
+
+### Réglages « surplomb » — ESSAYÉS PUIS ANNULÉS (cf. `tornadeSP.png`)
+L'utilisateur a fait reculer l'état jusqu'au **galbe ellipse pur**. Pistes testées et **retirées** :
+- `front_z = max(overhang, galbe)` (socle plat mini) → rejeté = « surépaisseur du fond ».
+- `D = max(depth, min_bulge)` (plancher d'amplitude) → trop, annulé.
+- demi-ellipses évasées `×(1+overhang)` (déborde de la base) → ne correspondait pas au tracé.
+- galbe en **2 demi-ellipses** (couvre toute la hauteur, supprime le plat) → ne correspondait pas
+  au **trait rouge** non plus.
+- « stade » (front plein + coins arrondis) → proposé, **pas appliqué** (interrompu).
+
+### ⚠ PROBLÈME OUVERT (point de reprise)
+Le galbe **ellipse unique + migration du sommet (swirl)** clippe à z=0 au-dessus de `yc+hy` → une
+**bande PLATE sans épaisseur en haut** de certaines lamelles (vu sur la **lamelle n°4** : plat
+y≈218..245). L'utilisateur veut qu'**à la place du plat, le galbe prenne la forme du trait rouge**
+(remplir vers le haut), mais aucune des formes essayées ci-dessus ne collait à son rouge. **État figé
+sur le galbe ellipse (plat présent)** en attendant **sa prochaine stratégie**.
+
+### TODO photo→lamelles
+- Caler la forme du haut du galbe sur le **trait rouge** de `tornadeSP.png` (stratégie utilisateur à venir).
+- Brancher aussi `belly(x)` (centre de profondeur) si besoin ; `twist` quantifié depuis la vue de dessus.
+- Trancher `/tmp/tornade_hull.stl` selon X dans l'appli → plan de découpe réel (besoin display).
+- `tests/views2hull.py` **pas commité** (untracked) ; sorties dans `/tmp/`.
