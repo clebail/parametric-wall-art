@@ -737,6 +737,19 @@ blender --background --python tests/gen_tornade3d.py -- /tmp/lam.stl \
 blender --background --python tests/gen_tornade3d.py -- tests/tornade3d.stl --preview /tmp/t_solid.png
 ```
 
+### Prototype tornade par BOOLÉENS — `tests/proto_tornade_bool.py` (fait — v1, 2026-06-18)
+- À partir de la silhouette plate `tests/tornade.stl`, recette booléenne : MOULE = silhouette
+  épaissie en Z (cookie-cutter) ; RELIEF = union(silhouette fine + 2 ellipsoïdes lobes + ellipsoïde
+  taille + goutte) ; RESULT = MOULE ∩ RELIEF (retaille au contour) ; **Twist** (Simple Deform, axe X,
+  bande à la taille) = vortex ; **dos plat** (bisect Z=0) ; **Remesh voxel** + smooth. Sortie STL +
+  aperçu **lamelles** (intersection avec un peigne de N boîtes).
+- **Clé apprise** : les ellipsoïdes de lobe doivent être **assez grands pour couvrir la silhouette**
+  (sinon l'intersection garde une « cacahuète » et perd le contour ailé). v1 OK : résultat
+  927×369×187 mm (silhouette 939×372), 2 lobes + taille torsadée + dos plat, fidèle à la gestalt vidéo.
+- Entièrement paramétrique (`--clé valeur`, dict `PARAMS`). À pousser : `twist_deg` (~130) pour un
+  vortex plus marqué, bombé moindre aux extrémités (ailes/goutte), `voxel` plus fin (facettes).
+- Décision : base pour que l'utilisateur fignole les primitives ; le pipeline découpe gère ce STL.
+
 ### TODO tornade3d
 - ~~Vérifier la modif épaisseur+débord ; régler `depth_ratio`/`belly`.~~ → **FAIT, 0.80/55 figé.**
 - ~~Nettoyage : `PARAMS["curve_y"]` plus utilisé → à retirer.~~ → **FAIT.**
