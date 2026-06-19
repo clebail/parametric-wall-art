@@ -7,3 +7,5 @@ Makefile
 parametric-wall-art
 parametric-wall-art.pro.user
 qrc_parametric-wall-art.cpp
+plan/*
+!plan/.keep

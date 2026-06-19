@@ -839,3 +839,51 @@ sur le galbe ellipse (plat présent)** en attendant **sa prochaine stratégie**.
 - Brancher aussi `belly(x)` (centre de profondeur) si besoin ; `twist` quantifié depuis la vue de dessus.
 - Trancher `/tmp/tornade_hull.stl` selon X dans l'appli → plan de découpe réel (besoin display).
 - `tests/views2hull.py` **pas commité** (untracked) ; sorties dans `/tmp/`.
+
+---
+
+## Workflow « SVG par lamelle, sculpté à la main » (À FAIRE — repris sur l'autre poste, 2026-06-19)
+
+### Idée (validée avec l'utilisateur)
+Plutôt que sculpter un solide 3D, l'utilisateur **modèle chaque section 2D à la main** en SVG, avec
+les voisines en référence (**onion-skinning**). Aller-retour :
+1. **Moi** : échantillonner un STL source en **52 sections** le long de l'axe **X** → produire
+   **52 SVG** (un par lamelle), chacun avec **3 calques verrouillés ghost** :
+   - `lamelle-precedente` (i-1) — référence, verrouillée
+   - `lamelle-courante` (i) — **le seul déverrouillé, à éditer**
+   - `lamelle-suivante` (i+1) — référence, verrouillée
+   - (la #1 sans précédente, la #52 sans suivante).
+2. **Utilisateur** : édite à la main le contour du calque `lamelle-courante` de chaque SVG.
+3. **Moi** : relis le calque `lamelle-courante` de chaque SVG, extrude (5 mm) + vide (5 mm),
+   loft/empile → **STL dos plat**, à trancher ensuite dans l'appli (axe X).
+
+### Décisions actées (via questions du 2026-06-19)
+- **Géométrie** : **52 lamelles**, épaisseur **5 mm**, vide **5 mm**.
+- **Source des sections de départ** : **régénérer le hull `views2hull.py`** (choix utilisateur),
+  repli possible sur `tests/tornade3d.stl` (déjà sur disque) si le hull n'est pas régénérable.
+- **Orientation SVG** : **Y vertical** (hauteur), **Z horizontal** (profondeur hors mur),
+  **dos plat Z=0 sur la ligne du bas**. Unités **mm**.
+- **Voisines** : **ghost sur calques Inkscape verrouillés** (gris clair, non éditables par erreur).
+
+### Contraintes de l'aller-retour (à respecter en éditant les SVG)
+- Garder les **chemins fermés** (sinon pas d'extrusion).
+- Ne pas renommer/supprimer le calque `lamelle-courante` (c'est ce que je relis).
+- Le **dos plat (Z=0)** = ligne de référence du bas, à ne pas déplacer sauf intention.
+
+### ⚠ POURQUOI C'EST EN PAUSE — bloqueurs sur le poste actuel (`/home/corentin`)
+La régénération du hull est **impossible ici** :
+- **Photos manquantes** : `views2hull.py` attend `/home/julfab/Images/tornade.png` (face),
+  `tornade2.png` (**dessus oblique**), `tornadeSP.png` (coupe annotée). Ce home (`/home/julfab`)
+  n'existe pas sur ce poste. Trouvé seulement la **vue de FACE** : `/home/corentin/Images/tornade.png`
+  et `/home/corentin/perso/tornade.png` (+ `tornade_preview.png`). **Pas de `tornade2.png` (dessus)
+  ni de `tornadeSP.png`** → impossible de reconstruire le profil de profondeur `depth(x)`.
+- **scipy absent** du Python système (`ModuleNotFoundError: No module named 'scipy'`). numpy présent.
+  Le venv `/tmp/tpv` n'est qu'un **symlink cassé** vers `/usr/bin/python3` (pas un vrai venv), et
+  `/tmp` est régulièrement purgé (le `/tmp/tornade_hull.stl` d'hier a disparu).
+
+### Reprise sur l'autre poste (qui a tous les outils)
+- Récupérer/poser les **3 photos** là où `views2hull.py` les attend (ou ajuster les chemins).
+- Avoir **numpy + scipy + PIL + matplotlib** dans un vrai venv.
+- Régénérer le hull (`python3 tests/views2hull.py …`), puis me demander de produire les 52 SVG
+  selon les décisions ci-dessus. Repli : `tests/tornade3d.stl` si on saute le hull.
+- Rappel : `tests/views2hull.py` est **untracked** (pas commité).
