@@ -952,6 +952,19 @@ disjointes** (= l'objet fini), dos plat, octant positif, mm.
 - Untracked : `tests/lamelles_svg2stl.py`, `tests/make_blend.py`, `tests/tornade_lamelles.stl`,
   `tests/tornade_lamelles.blend`.
 
+### Skill `build-tornade` — SVG → STL → .blend en 1 commande (fait, 2026-06-21)
+Wrapper qui enchaîne les étapes 3 et 5 (plus besoin de taper les deux commandes séparément) :
+- **`tests/build_tornade.sh`** (la « 1 commande ») : `tests/lamelles/*.svg` (calques
+  `lamelle-courante`) → `tests/tornade_lamelles.stl` (loft) → `tests/tornade_lamelles.blend`.
+  - Défauts câblés sur les chemins du projet. `cd` racine repo + `set -euo pipefail`.
+  - Options : `-- --planks` (52 planches au lieu du solide), `mon.stl mon.blend` (sorties custom),
+    `-- --preview /tmp/x.png` (aperçu PNG). Args après `--` passés à `lamelles_svg2stl.py`.
+- **Skill projet `.claude/skills/build-tornade/SKILL.md`** : invoque le script, rappelle de lancer
+  `refresh_ghosts.py` entre deux passes d'édition.
+- Vérifié bout en bout : 52 sections → STL 820×248×169 (18716 tris) → .blend sauvé OK.
+- Untracked à éventuellement commiter : `tests/build_tornade.sh`, `.claude/skills/build-tornade/`.
+
 **TODO suite** : l'utilisateur finit d'éditer les 52 calques `lamelle-courante` (4/52 faits) ;
-relancer `refresh_ghosts.py` entre passes ; puis `lamelles_svg2stl.py` → STL final → trancher dans
-l'appli (axe X) pour le plan de découpe réel (besoin display).
+relancer `refresh_ghosts.py` entre passes ; puis `tests/build_tornade.sh` (ou la skill
+`build-tornade`) → STL + .blend → trancher dans l'appli (axe X) pour le plan de découpe réel
+(besoin display).
