@@ -887,3 +887,71 @@ La régénération du hull est **impossible ici** :
 - Régénérer le hull (`python3 tests/views2hull.py …`), puis me demander de produire les 52 SVG
   selon les décisions ci-dessus. Repli : `tests/tornade3d.stl` si on saute le hull.
 - Rappel : `tests/views2hull.py` est **untracked** (pas commité).
+
+### Étape 1 LIVRÉE — `tests/stl2lamelles_svg.py` (2026-06-21, sur le poste `/home/julfab`)
+Poste complet retrouvé : 3 photos dans `/home/julfab/Images`, scipy+numpy+PIL+matplotlib OK,
+Blender 3.4.1, **Inkscape** dispo. Bloqueurs levés.
+- **Hull régénéré** : `python3 tests/views2hull.py` → `/tmp/tornade_hull.stl`, copié stable en
+  **`tests/tornade_hull.stl`** (6720 tris, **820×249×170 mm**, dos plat z=0). Aperçu `/tmp/hull_preview.png`
+  conforme (2 lobes + taille pincée).
+- **Nouveau script `tests/stl2lamelles_svg.py`** (numpy seul) : lit un STL binaire, le tranche en N
+  plans X (centres de N tranches égales, évite les capots des bouts), raccorde les segments en boucles
+  fermées (y,z), puis écrit 1 SVG/lamelle avec **3 calques** : `lamelle-precedente` (ghost rouge
+  pointillé, **verrouillé** `sodipodi:insensitive`), `lamelle-suivante` (ghost bleu pointillé,
+  **verrouillé**), `lamelle-courante` (contour noir + remplissage gris léger, **éditable**) + un repère
+  pointillé du **dos plat Z=0**. **Cadre commun** (même viewBox) sur toutes les lamelles → onion-skin
+  exact. Unités mm.
+- **52 SVG produits** → `tests/lamelles/lamelle_01..52.svg`. Cadre commun W(z)=193 × H(y)=273 mm,
+  z∈[0,169], 1 boucle propre/section (90-110 pts). Vérifié visuellement (`inkscape … --export-type=png`
+  sur la lamelle 26) : courante + voisines ghost se superposent bien, dos plat = bord **gauche** (Z=0).
+- ⚠ **À confirmer avec l'utilisateur** : orientation. Le plan disait « Y vertical, Z horizontal »
+  (respecté) **mais aussi** « dos plat sur la ligne du bas » → contradictoire. Rendu actuel = dos plat
+  sur le **bord gauche vertical**. Bascule = 1 flag (`to_svg`) si l'utilisateur veut le dos en bas.
+- **Source = hull** ; repli `tests/tornade3d.stl` non utilisé (le hull marche).
+- **`tests/refresh_ghosts.py`** (stdlib xml only) : après édition manuelle des calques `lamelle-courante`,
+  reconstruit dans chaque SVG les ghosts `lamelle-precedente`/`lamelle-suivante` à partir des contours
+  courants **à jour** des voisines (les ghosts du générateur sont des photos figées du hull). Ne touche
+  JAMAIS la courante ; ghosts recréés verrouillés ; préserve namedview/defs/transforms Inkscape ;
+  édition sur place. Testé : édition simulée sur la 26 → bien propagée au ghost `precedente` de la 27.
+- ⚠ Limite ghosts : ils ne se ré-affichent pas à la volée pendant l'édition ; relancer
+  `python3 tests/refresh_ghosts.py` entre deux passes pour recaler les voisines.
+- Untracked à éventuellement commiter : `tests/stl2lamelles_svg.py`, `tests/refresh_ghosts.py`,
+  `tests/tornade_hull.stl`, `tests/lamelles/`, `tests/views2hull.py`.
+
+### Étape 3 LIVRÉE — `tests/lamelles_svg2stl.py` (2026-06-21)
+Reconstruit le STL depuis les SVG édités. Relit **uniquement** le calque `lamelle-courante` de chaque
+`lamelle_*.svg` (ghosts ignorés), garde la plus grande boucle (jette la `<line>` repère + sous-chemins
+dégénérés), extrude chaque lamelle de **5 mm** avec **5 mm** de vide, empile le long de X → **52 planches
+disjointes** (= l'objet fini), dos plat, octant positif, mm.
+- **Parseur de chemin SVG maison** (pas de lib dispo) : M/L/H/V/C/S/Q/T/Z, abs+rel, Béziers
+  échantillonnés (16 seg), transforms matrix/translate/scale/rotate. Inverse du mapping générateur :
+  `Z = x−PAD`, `Y = (vbH−PAD)−y` (PAD=12, vbH lu du viewBox), puis recalage commun Y,Z ≥ 0.
+- **Capots** triangulés par ear-clipping (gère le concave) ; parois latérales en quads.
+- Vérifié : Inkscape réécrit les contours édités en **bspline→Bézier cubiques** (`C`) ; le parseur les
+  reproduit **fidèlement** (comparé rendu Inkscape lamelle_03 vs section reconstruite = identiques).
+- 1er run sur les 52 (4 éditées 01-04 + 48 hull) : `tests/tornade_lamelles.stl`, 22984 tris,
+  **515×249×169 mm**. Aperçu `/tmp/lam_stl.png` OK (2 lobes + taille).
+- **CHANGEMENT (demande user)** : la sortie par défaut est désormais le **SOLIDE PLEIN lofté** (le
+  « volume 3D total »), pas les planches — l'utilisateur lamellera plus tard dans l'appli. `--planks`
+  garde le mode 52 planches disjointes.
+- **Loft anti-vrillage par RIBS (correctif clé)** : 1re version (resampling longueur d'arc + ancre
+  coin bas-dos) **vrillait** salement (hélices/pincements, surtout au bout effilé — cf. user). Cause =
+  mauvaise correspondance des points entre sections. Refait par **reparamétrage par HAUTEUR** (`ribs`,
+  R=90) : à chaque niveau Y, Z arrière (min) + Z avant (max) → boucle structurée 2R pts, correspondance
+  parfaite section-à-section, **impossible à vriller**, et marche quel que soit le nb de nœuds du SVG.
+  → L'utilisateur peut dessiner librement en Bézier, AUCUNE contrainte de nb/ordre de points.
+  Vérifié au rendu (bout effilé propre). Reste le facettage en X = résolution 52 sections (normal).
+- `tests/tornade_lamelles.stl` (solide) : 16636 tris, **820×249×169 mm**.
+- **`tests/make_blend.py`** : `blender --background --python tests/make_blend.py -- STL OUT.blend`.
+  Importe le STL, redresse (modèle Y=hauteur → Blender Z=haut), matériau bois, caméra **ORTHO** cadrée
+  (vue face légèrement plongeante, `clip_end=span*10` sinon objet hors far-clip), soleil, vue 3D
+  sauvegardée en CAMERA + shading MATERIAL. Centre/dims calculés depuis les **sommets** (la bbox est
+  périmée après transform_apply) + **shade smooth** (affichage lisse, STL reste facetté). Sortie :
+  **`tests/tornade_lamelles.blend`** (2,4 Mo), vérifié au rendu EEVEE = volume plein lisse conforme
+  (2 lobes + taille torsadée, bout effilé propre).
+- Untracked : `tests/lamelles_svg2stl.py`, `tests/make_blend.py`, `tests/tornade_lamelles.stl`,
+  `tests/tornade_lamelles.blend`.
+
+**TODO suite** : l'utilisateur finit d'éditer les 52 calques `lamelle-courante` (4/52 faits) ;
+relancer `refresh_ghosts.py` entre passes ; puis `lamelles_svg2stl.py` → STL final → trancher dans
+l'appli (axe X) pour le plan de découpe réel (besoin display).
