@@ -968,3 +968,55 @@ Wrapper qui enchaîne les étapes 3 et 5 (plus besoin de taper les deux commande
 relancer `refresh_ghosts.py` entre passes ; puis `tests/build_tornade.sh` (ou la skill
 `build-tornade`) → STL + .blend → trancher dans l'appli (axe X) pour le plan de découpe réel
 (besoin display).
+
+---
+
+## PHOTO DE FACE SEULE → SOLIDE « tubes » — `tests/png2hull.py` (fait — v1, 2026-10-07)
+
+### Pourquoi
+Successeur de `views2hull.py` quand on n'a **que la vue de face** (pas de vue de dessus). Entrée :
+`/home/corentin/perso/tornade.png` (1961×669, sculpture **noire** sur mur gris clair). Verdict
+utilisateur : **« plutôt très bon »**.
+
+### Pipeline
+1. **Silhouette** (`silhouette`) : seuil luminance `g < thr·Otsu` avec **`thr=0.4`** — l'ombre portée
+   sur le mur est grise (~80-100), la sculpture quasi noire (<40) ; un Otsu plein englobait l'ombre.
+   Closing **horizontal** (3×25) pour boucher les vides entre lamelles (et le « peigne » en haut à
+   gauche), plus grande CC, fill, puis **lissage du contour** (flou gaussien σ=14 px + seuil 0,5)
+   pour effacer l'escalier des bouts de lamelles.
+2. **Inflation en tubes** (`inflate`) : `d` = distance au bord (EDT) ; axe médian ≈ crêtes de `d`
+   (maxima locaux 5×5) ; **R** = valeur de `d` sur la crête la plus proche (EDT `return_indices`),
+   lissée (σ=12) et ≥ `d` ; hauteur **`z = k·√(2·R·d − d²)`** (section ~circulaire, `k=0.9`).
+   → chaque bras devient un tube qui suit **sa propre direction**.
+   - ✗ Essai v0 écarté : profondeur **colonne par colonne** (`D = k·demi-hauteur(x)`) → **grosse
+     bosse dans la taille** (la taille est diagonale, donc haute en colonne alors qu'elle est fine).
+3. **Sections** (`build_sections`) : n=160 colonnes (centres de tranches égales), front `z(y)` lu dans
+   la carte, **dos plat z=0** ; échelle uniforme `px2mm = length/(x1−x0)`. Boucle = dos (ny pts) +
+   front **sans ses 2 bouts** (sinon sommets dupliqués → arêtes non-manifold).
+   → plus de « bande plate » en haut des lamelles (problème ouvert de `views2hull`) : la section
+   couvre toujours toute la hauteur.
+4. **Loft + capots** → STL binaire (`write_stl`).
+5. **Aperçu** (`--preview`) : photo+contour, carte de profondeur (isolignes), rendu lamelles maison
+   (nuage de points + z-buffer, Lambert + spéculaire) en vue 3/4 gauche et plongeante.
+   (Petits traits sous les lamelles en vue plongeante = artefact d'échantillonnage du rendu, pas du modèle.)
+
+### Résultat
+- `tests/tornade_png.stl` : **815 × 228 × 91 mm**, 40 320 tris, **fermé** (toutes les arêtes de
+  degré 2), volume 6,2 L, dos z=0. Aperçu : `tests/tornade_png_preview.png`.
+- Commande :
+  `python3 tests/png2hull.py ~/perso/tornade.png tests/tornade_png.stl --length 820 --k 0.9 --preview apercu.png`
+  Options : `--n` (sections), `--k` (rond/aplati), `--thr` (seuil silhouette), `--max-depth` (mm).
+- Dépendances : numpy, scipy, PIL, matplotlib. **scipy absent du Python système** → venv temporaire
+  de session (`python3 -m venv --system-site-packages … && pip install scipy matplotlib`).
+
+### Limites connues
+- **Pas de torsion/vortex** : sur la photo les lamelles du lobe droit sont **inclinées** (lamelles
+  probablement non parallèles dans l'original) ; l'appli ne coupe que selon X.
+- **Profondeur = hypothèse** (tubes ~ronds), pas mesurée : rien ne dit que les lobes ont cette
+  épaisseur réelle.
+
+### PROCHAINE ÉTAPE (prévue le soir du 2026-10-07)
+L'utilisateur fournit des **vues sous différents angles** → mesurer la profondeur réelle au lieu de
+la supposer : pistes = recaler `R`/`k` par zone (profondeur des lobes, de la taille, des pointes)
+depuis les silhouettes latérales/plongeantes (visual hull multi-vues, aligné sur le paramètre X),
+et éventuellement quantifier la **torsion** (position du sommet du galbe par section).
